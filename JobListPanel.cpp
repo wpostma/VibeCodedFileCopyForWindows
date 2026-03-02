@@ -39,6 +39,7 @@ static const wchar_t* StatusLabel(JobStatus s)
     switch (s) {
     case JobStatus::Scanning: return L"Scanning...";
     case JobStatus::Copying:  return L"Copying...";
+    case JobStatus::Paused:   return L"Paused";
     case JobStatus::Done:     return L"Done";
     case JobStatus::Error:    return L"Error";
     case JobStatus::Stopped:  return L"Stopped";
@@ -160,9 +161,14 @@ void JobListPanel::PaintRow(HDC dc, const RECT& rc, int idx, bool selected)
     SelectObject(dc, hOld);
     DeleteObject(hpen);
 
-    // Running progress bar (left edge stripe)
+    // Left edge stripe: blue=running, amber=paused
     if (job.status == JobStatus::Copying || job.status == JobStatus::Scanning) {
         HBRUSH hBar = CreateSolidBrush(JC::RunBar);
+        RECT barRc = { rc.left, rc.top, rc.left + 3, rc.bottom - 1 };
+        FillRect(dc, &barRc, hBar);
+        DeleteObject(hBar);
+    } else if (job.status == JobStatus::Paused) {
+        HBRUSH hBar = CreateSolidBrush(RGB(210, 140, 30));
         RECT barRc = { rc.left, rc.top, rc.left + 3, rc.bottom - 1 };
         FillRect(dc, &barRc, hBar);
         DeleteObject(hBar);

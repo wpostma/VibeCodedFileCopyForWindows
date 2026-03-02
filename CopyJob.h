@@ -7,7 +7,7 @@
 #include <memory>
 
 // ── Job status ───────────────────────────────────────────────────────────────
-enum class JobStatus { Idle, Scanning, Copying, Done, Error, Stopped };
+enum class JobStatus { Idle, Scanning, Copying, Paused, Done, Error, Stopped };
 
 // ── Log entry (one row in the log panel) ─────────────────────────────────────
 struct LogEntry {
@@ -49,6 +49,8 @@ struct CopyJob {
     // Thread control
     HANDLE                               threadHandle = nullptr;
     std::shared_ptr<std::atomic<bool>>   cancelFlag
+        = std::make_shared<std::atomic<bool>>(false);
+    std::shared_ptr<std::atomic<bool>>   pauseFlag
         = std::make_shared<std::atomic<bool>>(false);
 };
 

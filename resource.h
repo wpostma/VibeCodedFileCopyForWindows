@@ -24,8 +24,9 @@
 // ── Toolbar button IDs ───────────────────────────────────────────────────────
 #define ID_BTN_GO               2001
 #define ID_BTN_PLAY             2002
-#define ID_BTN_STOP             2003
-#define ID_BTN_STOPSQ           2004
+#define ID_BTN_PAUSE            2003
+#define ID_BTN_STOP             2004
+#define ID_BTN_STOPSQ           2005
 
 // ── Child window IDs ─────────────────────────────────────────────────────────
 #define IDC_JOBLIST             3001

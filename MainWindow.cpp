@@ -52,7 +52,8 @@ bool MainWindow::Create(HINSTANCE hInst)
     m_hInst    = hInst;
     m_isAdmin  = CheckIsAdmin();
 
-    m_cursorNS = LoadCursor(nullptr, IDC_SIZENS);
+    m_cursorNS   = LoadCursor(nullptr, IDC_SIZENS);
+    m_cursorBusy = LoadCursor(nullptr, IDC_APPSTARTING);
 
     if (!RegisterClass(hInst)) return false;
     if (!JobListPanel::RegisterClass(hInst)) return false;
@@ -339,8 +340,9 @@ void MainWindow::OnCreate()
         SendMessageW(h, WM_SETFONT, (WPARAM)m_fontUI, TRUE);
         return h;
     };
-    HWND hPlay = makeBtn(L"\x25B6", ID_BTN_PLAY,   8);   // ▶
-    HWND hStop = makeBtn(L"\x25FC", ID_BTN_STOPSQ, 58);  // ■
+    m_hwndBtnPlay  = makeBtn(L"\x25B6", ID_BTN_PLAY,   8);    // ▶
+    m_hwndBtnPause = makeBtn(L"\x23F8", ID_BTN_PAUSE,  58);   // ⏸
+    m_hwndBtnStop  = makeBtn(L"\x25FC", ID_BTN_STOPSQ, 108);  // ■
 
     // Tooltips (parented to m_hwnd to match the buttons)
     HWND hTT = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASS, nullptr,
@@ -351,11 +353,15 @@ void MainWindow::OnCreate()
     TOOLINFOW ti  = { sizeof(ti) };
     ti.uFlags     = TTF_SUBCLASS | TTF_IDISHWND;
     ti.hwnd       = m_hwnd;
-    ti.uId        = (UINT_PTR)hPlay;
-    ti.lpszText   = const_cast<LPWSTR>(L"Go  (run selected job)");
+    ti.uId        = (UINT_PTR)m_hwndBtnPlay;
+    ti.lpszText   = const_cast<LPWSTR>(L"Run selected job");
     SendMessageW(hTT, TTM_ADDTOOL, 0, (LPARAM)&ti);
 
-    ti.uId        = (UINT_PTR)hStop;
+    ti.uId        = (UINT_PTR)m_hwndBtnPause;
+    ti.lpszText   = const_cast<LPWSTR>(L"Pause");
+    SendMessageW(hTT, TTM_ADDTOOL, 0, (LPARAM)&ti);
+
+    ti.uId        = (UINT_PTR)m_hwndBtnStop;
     ti.lpszText   = const_cast<LPWSTR>(L"Stop");
     SendMessageW(hTT, TTM_ADDTOOL, 0, (LPARAM)&ti);
 
@@ -404,6 +410,7 @@ void MainWindow::OnCreate()
         UpdateJobSelection();
     }
     m_jobList.Refresh();
+    UpdateToolbarState();
 
     RepositionChildren();
 }
@@ -434,6 +441,7 @@ void MainWindow::UpdateJobSelection()
         m_logPanel.LoadJob(m_jobs[m_selJob]->logEntries);
     else
         m_logPanel.Clear();
+    UpdateToolbarState();
 }
 
 // ── Job operations ────────────────────────────────────────────────────────────
@@ -504,13 +512,21 @@ void MainWindow::CmdRunJob(int idx)
     auto& job = *m_jobs[idx];
     Log(L"CmdRunJob: job='%s' status=%d src='%s' dst='%s'",
         job.name.c_str(), (int)job.status, job.sourcePath.c_str(), job.destPath.c_str());
+
+    // If paused, resume (clear the pause flag; thread wakes up on its own)
+    if (job.status == JobStatus::Paused) {
+        job.pauseFlag->store(false);
+        UpdateToolbarState();
+        return;
+    }
     if (job.status == JobStatus::Copying || job.status == JobStatus::Scanning) {
         Log(L"CmdRunJob: already running, returning");
         return;
     }
 
-    // Reset cancel flag
+    // Fresh start — reset both flags and all runtime state
     job.cancelFlag->store(false);
+    job.pauseFlag->store(false);
     job.status     = JobStatus::Scanning;
     job.stats      = {};
     job.logEntries.clear();
@@ -535,19 +551,63 @@ void MainWindow::CmdRunJob(int idx)
     ep.sourcePath = job.sourcePath;
     ep.destPath   = job.destPath;
     ep.cancelFlag = job.cancelFlag;
+    ep.pauseFlag  = job.pauseFlag;
 
     job.threadHandle = StartCopyEngine(ep);
     Log(L"CmdRunJob: StartCopyEngine returned handle=%p", (void*)job.threadHandle);
     m_jobList.Refresh();
+    UpdateToolbarState();
+}
+
+void MainWindow::CmdPauseJob(int idx)
+{
+    if (idx < 0) idx = m_selJob;
+    if (idx < 0 || idx >= (int)m_jobs.size()) return;
+    auto& job = *m_jobs[idx];
+    if (job.status == JobStatus::Scanning || job.status == JobStatus::Copying)
+        job.pauseFlag->store(true);
+    // Status update arrives via WM_JOB_PROGRESS when thread enters its pause loop
 }
 
 void MainWindow::CmdStopJob(int idx)
 {
     if (idx < 0) idx = m_selJob;
     if (idx < 0 || idx >= (int)m_jobs.size()) return;
-
-    m_jobs[idx]->cancelFlag->store(true);
+    auto& job = *m_jobs[idx];
+    // If paused, clear pause first so the thread can see the cancel
+    job.pauseFlag->store(false);
+    job.cancelFlag->store(true);
     m_jobList.Refresh();
+}
+
+bool MainWindow::AnyJobActive() const
+{
+    for (const auto& j : m_jobs) {
+        if (j->status == JobStatus::Scanning ||
+            j->status == JobStatus::Copying  ||
+            j->status == JobStatus::Paused)
+            return true;
+    }
+    return false;
+}
+
+void MainWindow::UpdateToolbarState()
+{
+    if (!m_hwndBtnPlay || !m_hwndBtnPause || !m_hwndBtnStop) return;
+
+    JobStatus status = JobStatus::Idle;
+    if (m_selJob >= 0 && m_selJob < (int)m_jobs.size())
+        status = m_jobs[m_selJob]->status;
+
+    bool running = (status == JobStatus::Scanning || status == JobStatus::Copying);
+    bool paused  = (status == JobStatus::Paused);
+
+    // Play: enabled when idle/done/error/stopped (start) or paused (resume)
+    EnableWindow(m_hwndBtnPlay,  !running);
+    // Pause: enabled only while actively running
+    EnableWindow(m_hwndBtnPause, running);
+    // Stop: enabled while running or paused
+    EnableWindow(m_hwndBtnStop,  running || paused);
 }
 
 // ── Thread message handlers ───────────────────────────────────────────────────
@@ -557,6 +617,8 @@ void MainWindow::OnJobProgress(int jobIdx, ProgressMsg* msg)
         m_jobs[jobIdx]->stats  = msg->stats;
         m_jobs[jobIdx]->status = msg->status;
         m_jobList.Refresh();
+        if (jobIdx == m_selJob)
+            UpdateToolbarState();
     }
     delete msg;
 }
@@ -601,6 +663,7 @@ void MainWindow::OnJobDone(int jobIdx, ULONGLONG errors)
     job.lastRunTime = buf;
 
     m_jobList.Refresh();
+    UpdateToolbarState();
     SaveJobs();   // persist updated stats + last-run time
 }
 
@@ -633,10 +696,18 @@ void MainWindow::OnLButtonUp(int x, int y)
     }
 }
 
-void MainWindow::OnSetCursor(HWND, UINT)
+bool MainWindow::OnSetCursor(HWND, UINT hitCode)
 {
     POINT pt; GetCursorPos(&pt); ScreenToClient(m_hwnd, &pt);
-    if (IsInSplitter(pt.y)) SetCursor(m_cursorNS);
+    if (m_draggingSplit || IsInSplitter(pt.y)) {
+        SetCursor(m_cursorNS);
+        return true;
+    }
+    if (AnyJobActive() && hitCode == HTCLIENT) {
+        SetCursor(m_cursorBusy);
+        return true;
+    }
+    return false;
 }
 
 // ── WM_PAINT (splitter bar) ───────────────────────────────────────────────────
@@ -676,6 +747,7 @@ void MainWindow::OnCommand(int id, HWND)
     case ID_FILE_DELETEJOB: CmdDeleteJob(); break;
     case ID_FILE_RUNJOB:
     case ID_BTN_PLAY:       CmdRunJob();    break;
+    case ID_BTN_PAUSE:      CmdPauseJob();  break;
     case ID_FILE_STOPJOB:
     case ID_BTN_STOPSQ:     CmdStopJob();   break;
     case ID_FILE_EXIT:      DestroyWindow(m_hwnd); break;
@@ -767,8 +839,9 @@ LRESULT CALLBACK MainWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_SETCURSOR:
-        pThis->OnSetCursor((HWND)wp, HIWORD(lp));
-        return 0;
+        if (pThis->OnSetCursor((HWND)wp, HIWORD(lp)))
+            return TRUE;
+        break;
 
     case WM_JOB_PROGRESS:
         pThis->OnJobProgress((int)wp, reinterpret_cast<ProgressMsg*>(lp));

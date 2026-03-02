@@ -11,6 +11,7 @@ struct EngineParams {
     std::wstring                       sourcePath;
     std::wstring                       destPath;
     std::shared_ptr<std::atomic<bool>> cancelFlag;
+    std::shared_ptr<std::atomic<bool>> pauseFlag;
 };
 
 // Launch a background copy thread; returns the thread handle (caller must CloseHandle).

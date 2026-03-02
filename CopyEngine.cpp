@@ -118,6 +118,7 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
     HWND   hwnd    = params.hwndMain;
     int    idx     = params.jobIndex;
     auto&  cancel  = params.cancelFlag;
+    auto&  pause   = params.pauseFlag;
 
     ULONGLONG startTick = GetTickCount64();
     JobStats  stats     = {};
@@ -151,7 +152,23 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
 
     CopyCallbackCtx cbCtx{ hwnd, idx, &stats, cancel };
 
+    bool wasPaused = false;
     for (auto& f : files) {
+        if (cancel->load()) break;
+
+        // Pause: wait between files until the flag clears
+        if (pause->load()) {
+            if (!wasPaused) {
+                PostProgress(hwnd, idx, stats, JobStatus::Paused);
+                wasPaused = true;
+            }
+            while (pause->load() && !cancel->load())
+                Sleep(50);
+            if (!cancel->load()) {
+                PostProgress(hwnd, idx, stats, JobStatus::Copying);
+                wasPaused = false;
+            }
+        }
         if (cancel->load()) break;
 
         std::wstring srcFull  = params.sourcePath + L"\\" + f.relPath;

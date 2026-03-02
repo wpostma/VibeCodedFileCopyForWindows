@@ -32,7 +32,7 @@ private:
     void OnMouseMove(int x, int y, DWORD keys);
     void OnLButtonDown(int x, int y);
     void OnLButtonUp(int x, int y);
-    void OnSetCursor(HWND hwndHit, UINT hitCode);
+    bool OnSetCursor(HWND hwndHit, UINT hitCode);  // returns true if handled
     void OnJobProgress(int jobIdx, ProgressMsg* msg);
     void OnJobLog(int jobIdx, LogMsg* msg);
     void OnJobDone(int jobIdx, ULONGLONG errors);
@@ -42,8 +42,12 @@ private:
     void CmdNewJob();
     void CmdEditJob();
     void CmdDeleteJob();
-    void CmdRunJob(int idx = -1);   // -1 = selected
+    void CmdRunJob(int idx = -1);   // -1 = selected; also resumes a paused job
+    void CmdPauseJob(int idx = -1);
     void CmdStopJob(int idx = -1);
+
+    void UpdateToolbarState();      // enable/disable/gray toolbar buttons
+    bool AnyJobActive() const;      // any job Scanning/Copying/Paused
 
     // Persistence
     void SaveJobs();
@@ -65,6 +69,9 @@ private:
 
     // Child controls
     HWND          m_hwndToolbar  = nullptr;
+    HWND          m_hwndBtnPlay  = nullptr;
+    HWND          m_hwndBtnPause = nullptr;
+    HWND          m_hwndBtnStop  = nullptr;
     JobListPanel  m_jobList;
     LogPanel      m_logPanel;
     HWND          m_hwndStatus   = nullptr;   // custom-drawn strip
@@ -88,9 +95,10 @@ public:
     bool         m_isAdmin         = false;
 private:
 
-    // GDI
-    HFONT m_fontUI     = nullptr;
-    HFONT m_fontUIBold = nullptr;
-    HBRUSH m_brStatus  = nullptr;
-    HCURSOR m_cursorNS = nullptr;
+    // GDI / cursors
+    HFONT   m_fontUI     = nullptr;
+    HFONT   m_fontUIBold = nullptr;
+    HBRUSH  m_brStatus   = nullptr;
+    HCURSOR m_cursorNS   = nullptr;
+    HCURSOR m_cursorBusy = nullptr;   // IDC_APPSTARTING (arrow + spinning ring)
 };
