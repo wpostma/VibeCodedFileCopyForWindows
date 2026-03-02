@@ -50,7 +50,7 @@ bool MainWindow::RegisterClass(HINSTANCE hInst)
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     wc.lpszMenuName  = MAKEINTRESOURCE(IDR_MENU_MAIN);
     wc.lpszClassName = k_WndClass;
-    wc.hIcon        = LoadIcon(nullptr, IDI_APPLICATION);
+    wc.hIcon        = LoadIconW(hInst, MAKEINTRESOURCEW(IDI_APP));
     wc.hIconSm      = wc.hIcon;
     return RegisterClassExW(&wc) != 0;
 }
