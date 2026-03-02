@@ -1,0 +1,324 @@
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <windowsx.h>
+#include <commctrl.h>
+#include <string>
+#include "JobListPanel.h"
+
+static const wchar_t* k_ClassName = L"FCU_JobList";
+
+// ── Color palette ─────────────────────────────────────────────────────────────
+namespace JC {
+    const COLORREF BgOdd     = RGB(241, 246, 255);
+    const COLORREF BgEven    = RGB(233, 240, 254);
+    const COLORREF BgSel     = RGB(180, 205, 245);
+    const COLORREF BgSelHot  = RGB(160, 190, 240);
+    const COLORREF Border    = RGB(205, 215, 232);
+    const COLORREF TxtName   = RGB( 16,  24,  56);
+    const COLORREF TxtSub    = RGB(100, 112, 140);
+    const COLORREF TxtStats  = RGB( 50,  60,  85);
+    const COLORREF TxtErr    = RGB(180,  40,  40);
+    const COLORREF RunBar    = RGB( 60, 130, 220);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+static std::wstring FmtBytes(ULONGLONG b)
+{
+    wchar_t buf[32];
+    if      (b >= (1ULL<<40)) swprintf_s(buf, L"%.2f TB", b/(double)(1ULL<<40));
+    else if (b >= (1ULL<<30)) swprintf_s(buf, L"%.2f GB", b/(double)(1ULL<<30));
+    else if (b >= (1ULL<<20)) swprintf_s(buf, L"%.2f MB", b/(double)(1ULL<<20));
+    else if (b >= (1ULL<<10)) swprintf_s(buf, L"%.1f KB", b/(double)(1ULL<<10));
+    else                      swprintf_s(buf, L"%llu B",  b);
+    return buf;
+}
+
+static const wchar_t* StatusLabel(JobStatus s)
+{
+    switch (s) {
+    case JobStatus::Scanning: return L"Scanning...";
+    case JobStatus::Copying:  return L"Copying...";
+    case JobStatus::Done:     return L"Done";
+    case JobStatus::Error:    return L"Error";
+    case JobStatus::Stopped:  return L"Stopped";
+    default:                  return L"Idle";
+    }
+}
+
+// ── Registration ──────────────────────────────────────────────────────────────
+
+bool JobListPanel::RegisterClass(HINSTANCE hInst)
+{
+    WNDCLASSEXW wc  = { sizeof(wc) };
+    wc.style        = CS_DBLCLKS | CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc  = WndProc;
+    wc.hInstance    = hInst;
+    wc.hCursor      = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = nullptr;
+    wc.lpszClassName = k_ClassName;
+    return RegisterClassExW(&wc) != 0;
+}
+
+// ── Create / Destroy ──────────────────────────────────────────────────────────
+
+bool JobListPanel::Create(HWND parent, int id,
+                          std::vector<std::unique_ptr<CopyJob>>* jobs)
+{
+    m_jobs = jobs;
+    m_hwnd = CreateWindowExW(0, k_ClassName, L"",
+                WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+                0, 0, 100, 100,
+                parent, (HMENU)(UINT_PTR)id,
+                (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE),
+                this);
+    return m_hwnd != nullptr;
+}
+
+void JobListPanel::Destroy()
+{
+    if (m_fontName) { DeleteObject(m_fontName); m_fontName = nullptr; }
+    if (m_fontSub)  { DeleteObject(m_fontSub);  m_fontSub  = nullptr; }
+    if (m_hwnd)     { DestroyWindow(m_hwnd); m_hwnd = nullptr; }
+}
+
+void JobListPanel::Refresh() { if (m_hwnd) InvalidateRect(m_hwnd, nullptr, FALSE); }
+
+void JobListPanel::SetSelectedIndex(int i)
+{
+    m_selIdx = i;
+    Refresh();
+}
+
+// ── Hit test / scroll ─────────────────────────────────────────────────────────
+
+int JobListPanel::HitTestRow(int y) const
+{
+    int absY = y + m_scrollY;
+    int idx  = absY / k_rowH;
+    if (!m_jobs) return -1;
+    int n = (int)m_jobs->size();
+    return (idx >= 0 && idx < n) ? idx : -1;
+}
+
+void JobListPanel::ScrollBy(int lines)
+{
+    if (!m_jobs) return;
+    RECT rc; GetClientRect(m_hwnd, &rc);
+    int maxScroll = (int)m_jobs->size() * k_rowH - (rc.bottom - rc.top);
+    if (maxScroll < 0) maxScroll = 0;
+    m_scrollY = max(0, min(m_scrollY + lines * k_rowH, maxScroll));
+    Refresh();
+}
+
+// ── Font helper ───────────────────────────────────────────────────────────────
+
+HFONT JobListPanel::CreateFont_(int ptSize, bool bold)
+{
+    LOGFONTW lf = {};
+    lf.lfHeight  = -MulDiv(ptSize, GetDeviceCaps(GetDC(nullptr), LOGPIXELSY), 72);
+    lf.lfWeight  = bold ? FW_BOLD : FW_NORMAL;
+    lf.lfQuality = CLEARTYPE_QUALITY;
+    wcscpy_s(lf.lfFaceName, L"Segoe UI");
+    return CreateFontIndirectW(&lf);
+}
+
+// ── Paint ─────────────────────────────────────────────────────────────────────
+
+void JobListPanel::PaintRow(HDC dc, const RECT& rc, int idx, bool selected)
+{
+    const CopyJob& job = *(*m_jobs)[idx];
+
+    // Background
+    COLORREF bg = selected ? JC::BgSel : ((idx & 1) ? JC::BgEven : JC::BgOdd);
+    HBRUSH hbr = CreateSolidBrush(bg);
+    FillRect(dc, &rc, hbr);
+    DeleteObject(hbr);
+
+    // Bottom border
+    HPEN hpen = CreatePen(PS_SOLID, 1, JC::Border);
+    HPEN hOld = (HPEN)SelectObject(dc, hpen);
+    MoveToEx(dc, rc.left,  rc.bottom - 1, nullptr);
+    LineTo  (dc, rc.right, rc.bottom - 1);
+    SelectObject(dc, hOld);
+    DeleteObject(hpen);
+
+    // Running progress bar (left edge stripe)
+    if (job.status == JobStatus::Copying || job.status == JobStatus::Scanning) {
+        HBRUSH hBar = CreateSolidBrush(JC::RunBar);
+        RECT barRc = { rc.left, rc.top, rc.left + 3, rc.bottom - 1 };
+        FillRect(dc, &barRc, hBar);
+        DeleteObject(hBar);
+    }
+
+    SetBkMode(dc, TRANSPARENT);
+    const int padX = 12, padY = 9;
+
+    // ── Row 1 left: job name ──────────────────────────────────────────────────
+    SelectObject(dc, m_fontName);
+    SetTextColor(dc, JC::TxtName);
+    RECT r1L = { rc.left + padX, rc.top + padY,
+                 rc.right - 260, rc.top + padY + 18 };
+    DrawTextW(dc, job.name.c_str(), -1, &r1L, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    // ── Row 1 right: "X hours ago · N changes · no errors" ────────────────────
+    SelectObject(dc, m_fontSub);
+    std::wstring r1Right;
+    if (!job.lastRunTime.empty()) {
+        r1Right = job.lastRunTime + L"  \xB7  ";
+        wchar_t tmp[64];
+        swprintf_s(tmp, L"%llu changes", job.stats.changeCount);
+        r1Right += tmp;
+        r1Right += (job.stats.errorCount == 0) ? L"  \xB7  no errors" : L"  \xB7  errors";
+    } else {
+        r1Right = L"Never run";
+    }
+    SetTextColor(dc, JC::TxtStats);
+    RECT r1R = { rc.left + padX, rc.top + padY, rc.right - padX, rc.top + padY + 18 };
+    DrawTextW(dc, r1Right.c_str(), -1, &r1R, DT_RIGHT | DT_SINGLELINE);
+
+    // ── Row 2 left: "Next scan in..." or status ───────────────────────────────
+    SetTextColor(dc, JC::TxtSub);
+    std::wstring r2Left;
+    if (job.status == JobStatus::Idle || job.status == JobStatus::Done) {
+        r2Left = job.nextRunTime.empty() ? L"Ready" : (L"Next scan " + job.nextRunTime);
+    } else {
+        r2Left = StatusLabel(job.status);
+    }
+    RECT r2L = { rc.left + padX, rc.top + padY + 22,
+                 rc.right - 260, rc.top + padY + 38 };
+    DrawTextW(dc, r2Left.c_str(), -1, &r2L, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    // ── Row 2 right: "Z GB · M files · N folders" ────────────────────────────
+    std::wstring r2Right;
+    if (job.stats.totalFiles > 0 || job.stats.copiedBytes > 0) {
+        wchar_t tmp[128];
+        swprintf_s(tmp, L"%s  \xB7  %llu files  \xB7  %llu folders",
+            FmtBytes(job.stats.copiedBytes > 0 ? job.stats.copiedBytes : job.stats.totalBytes).c_str(),
+            job.stats.copiedFiles > 0 ? job.stats.copiedFiles : job.stats.totalFiles,
+            job.stats.totalFolders);
+        r2Right = tmp;
+    }
+    if (!r2Right.empty()) {
+        SetTextColor(dc, JC::TxtSub);
+        RECT r2R = { rc.left + padX, rc.top + padY + 22,
+                     rc.right - padX, rc.top + padY + 38 };
+        DrawTextW(dc, r2Right.c_str(), -1, &r2R, DT_RIGHT | DT_SINGLELINE);
+    }
+}
+
+void JobListPanel::OnPaint()
+{
+    PAINTSTRUCT ps;
+    HDC hdc = BeginPaint(m_hwnd, &ps);
+
+    RECT rcClient; GetClientRect(m_hwnd, &rcClient);
+    int W = rcClient.right, H = rcClient.bottom;
+
+    // Double-buffer
+    HDC memDC  = CreateCompatibleDC(hdc);
+    HBITMAP bmp = CreateCompatibleBitmap(hdc, W, H);
+    HBITMAP oldBmp = (HBITMAP)SelectObject(memDC, bmp);
+
+    // Background fill
+    HBRUSH hBg = CreateSolidBrush(JC::BgOdd);
+    FillRect(memDC, &rcClient, hBg);
+    DeleteObject(hBg);
+
+    if (m_jobs) {
+        int n = (int)m_jobs->size();
+        for (int i = 0; i < n; i++) {
+            int top    = i * k_rowH - m_scrollY;
+            int bottom = top + k_rowH;
+            if (bottom < 0 || top > H) continue;
+
+            RECT rowRc = { 0, top, W, bottom };
+            PaintRow(memDC, rowRc, i, i == m_selIdx);
+        }
+
+        // Empty state
+        if (n == 0) {
+            SelectObject(memDC, m_fontSub ? m_fontSub : (HGDIOBJ)GetStockObject(DEFAULT_GUI_FONT));
+            SetTextColor(memDC, JC::TxtSub);
+            SetBkMode(memDC, TRANSPARENT);
+            RECT msg = rcClient;
+            DrawTextW(memDC, L"No copy jobs.  Use File \x2192 New Job to add one.",
+                      -1, &msg, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+    }
+
+    BitBlt(hdc, 0, 0, W, H, memDC, 0, 0, SRCCOPY);
+    SelectObject(memDC, oldBmp);
+    DeleteObject(bmp);
+    DeleteDC(memDC);
+
+    EndPaint(m_hwnd, &ps);
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+
+void JobListPanel::OnLButtonDown(int x, int y)
+{
+    int idx = HitTestRow(y);
+    if (idx != m_selIdx) {
+        m_selIdx = idx;
+        Refresh();
+        if (m_selCb) m_selCb(m_selIdx, m_selCtx);
+    }
+    SetFocus(m_hwnd);
+}
+
+void JobListPanel::OnLButtonDblClk(int x, int y)
+{
+    int idx = HitTestRow(y);
+    if (idx >= 0) {
+        // Notify parent to open edit dialog
+        NMHDR nm = { m_hwnd, (UINT_PTR)GetDlgCtrlID(m_hwnd), NM_DBLCLK };
+        SendMessageW(GetParent(m_hwnd), WM_NOTIFY, nm.idFrom, (LPARAM)&nm);
+    }
+}
+
+void JobListPanel::OnMouseWheel(int delta)
+{
+    ScrollBy(-(delta / WHEEL_DELTA));
+}
+
+void JobListPanel::OnSize(int, int) { Refresh(); }
+
+// ── Window proc ───────────────────────────────────────────────────────────────
+
+LRESULT CALLBACK JobListPanel::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    JobListPanel* pThis = nullptr;
+
+    if (msg == WM_CREATE) {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+        pThis = reinterpret_cast<JobListPanel*>(cs->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)pThis);
+        pThis->m_hwnd = hwnd;
+
+        // Create fonts
+        pThis->m_fontName = CreateFont_(10, true);
+        pThis->m_fontSub  = CreateFont_( 9, false);
+        return 0;
+    }
+
+    pThis = reinterpret_cast<JobListPanel*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (!pThis) return DefWindowProcW(hwnd, msg, wp, lp);
+
+    switch (msg) {
+    case WM_ERASEBKGND: return 1;
+    case WM_PAINT:      pThis->OnPaint(); return 0;
+    case WM_SIZE:       pThis->OnSize(LOWORD(lp), HIWORD(lp)); return 0;
+    case WM_LBUTTONDOWN: pThis->OnLButtonDown(GET_X_LPARAM(lp), GET_Y_LPARAM(lp)); return 0;
+    case WM_LBUTTONDBLCLK: pThis->OnLButtonDblClk(GET_X_LPARAM(lp), GET_Y_LPARAM(lp)); return 0;
+    case WM_MOUSEWHEEL:
+        pThis->OnMouseWheel((short)HIWORD(wp));
+        return 0;
+    case WM_DESTROY:
+        if (pThis->m_fontName) { DeleteObject(pThis->m_fontName); pThis->m_fontName = nullptr; }
+        if (pThis->m_fontSub)  { DeleteObject(pThis->m_fontSub);  pThis->m_fontSub  = nullptr; }
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
