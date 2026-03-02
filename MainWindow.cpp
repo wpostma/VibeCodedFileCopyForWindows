@@ -10,6 +10,7 @@
 #include "CopyEngine.h"
 #include "resource.h"
 #include "logger.h"
+#include "utils.h"
 
 static const wchar_t* k_WndClass  = L"FileCopyUtility";
 
@@ -27,16 +28,6 @@ static bool CheckIsAdmin()
         FreeSid(adminSid);
     }
     return result != FALSE;
-}
-
-// ── Timestamp ────────────────────────────────────────────────────────────────
-std::wstring MainWindow::TimestampNow()
-{
-    SYSTEMTIME st; GetLocalTime(&st);
-    wchar_t buf[32];
-    swprintf_s(buf, L"%04d.%02d.%02d %02d:%02d:%02d",
-               st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-    return buf;
 }
 
 // ── Registration ─────────────────────────────────────────────────────────────

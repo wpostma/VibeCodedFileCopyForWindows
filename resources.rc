@@ -1,0 +1,80 @@
+#include "resource.h"
+#include <windows.h>
+
+// ── Application icon ──────────────────────────────────────────────────────────
+IDI_APP ICON "FileCopyUtility.ico"
+
+// ── Main menu ─────────────────────────────────────────────────────────────────
+IDR_MENU_MAIN MENU
+BEGIN
+    POPUP "&File"
+    BEGIN
+        MENUITEM "&New Job...\tCtrl+N",         ID_FILE_NEWJOB
+        MENUITEM "&Edit Job...",                ID_FILE_EDITJOB
+        MENUITEM "&Delete Job",                 ID_FILE_DELETEJOB
+        MENUITEM SEPARATOR
+        MENUITEM "&Run\tCtrl+G",                ID_FILE_RUNJOB
+        MENUITEM "&Stop",                       ID_FILE_STOPJOB
+        MENUITEM SEPARATOR
+        MENUITEM "E&xit",                       ID_FILE_EXIT
+    END
+    POPUP "&Options"
+    BEGIN
+        MENUITEM "&Settings...",                ID_OPTIONS_SETTINGS
+    END
+    POPUP "&Help"
+    BEGIN
+        MENUITEM "&About File Copy Utility...", ID_HELP_ABOUT
+    END
+END
+
+// ── Add Job dialog ────────────────────────────────────────────────────────────
+IDD_ADD_JOB DIALOGEX 0, 0, 252, 105
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Add Copy Job"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT       "Job name:",        -1,                  6,  10,  52, 10
+    EDITTEXT                        IDC_EDIT_JOBNAME,   62,   8, 182, 13, ES_AUTOHSCROLL
+
+    LTEXT       "Source folder:",   -1,                  6,  28,  52, 10
+    EDITTEXT                        IDC_EDIT_SOURCE,    62,  26, 152, 13, ES_AUTOHSCROLL
+    PUSHBUTTON  "...",              IDC_BTN_BROWSE_SRC, 218,  25,  26, 14
+
+    LTEXT       "Destination:",     -1,                  6,  46,  52, 10
+    EDITTEXT                        IDC_EDIT_DEST,      62,  44, 152, 13, ES_AUTOHSCROLL
+    PUSHBUTTON  "...",              IDC_BTN_BROWSE_DST, 218,  43,  26, 14
+
+    DEFPUSHBUTTON "OK",             IDOK,               140,  83,  50, 14
+    PUSHBUTTON  "Cancel",           IDCANCEL,           194,  83,  50, 14
+END
+
+// ── Version information ───────────────────────────────────────────────────────
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"   // Language: English (US),  Code page: Unicode
+        BEGIN
+            VALUE "CompanyName",      "Warren"
+            VALUE "FileDescription",  "File Copy Utility"
+            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "InternalName",     "FileCopyUtility"
+            VALUE "LegalCopyright",   "Copyright \251 2026"
+            VALUE "OriginalFilename", "FileCopyUtility.exe"
+            VALUE "ProductName",      "File Copy Utility"
+            VALUE "ProductVersion",   "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0   // English (US) / Unicode
+    END
+END

@@ -58,7 +58,6 @@ private:
     // Status strip (custom painted)
     void PaintStatus(HDC dc, const RECT& rc);
 
-    static std::wstring TimestampNow();
     static std::wstring FormatElapsed(ULONGLONG startTick);
 
     HWND     m_hwnd        = nullptr;

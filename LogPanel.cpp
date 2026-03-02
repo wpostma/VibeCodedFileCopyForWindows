@@ -69,6 +69,18 @@ void LogPanel::Destroy()
     if (m_hwnd)     { DestroyWindow(m_hwnd);    m_hwnd     = nullptr; }
 }
 
+void LogPanel::ComputeTimestampWidth()
+{
+    // Measure a representative worst-case timestamp with the actual font
+    HDC dc = GetDC(m_hwnd);
+    HFONT old = (HFONT)SelectObject(dc, m_fontTs);
+    SIZE sz;
+    GetTextExtentPoint32W(dc, L"0000.00.00 00:00:00.000", 23, &sz);
+    SelectObject(dc, old);
+    ReleaseDC(m_hwnd, dc);
+    m_tsW = sz.cx + 10;  // 10px breathing room
+}
+
 // ── Data management ───────────────────────────────────────────────────────────
 
 void LogPanel::Clear()
@@ -146,7 +158,7 @@ bool LogPanel::HitTestToggle(int x, int y, int* outIdx) const
     if (!m_all[allIdx].isGroup) return false;
 
     int rowTop   = k_headerH + visIdx * k_rowH - m_scrollY;
-    int togX     = k_tsW + m_all[allIdx].depth * k_indW;
+    int togX     = m_tsW + m_all[allIdx].depth * k_indW;
     RECT togRc   = { togX, rowTop + 3, togX + k_togW, rowTop + k_rowH - 3 };
     POINT pt     = { x, y };
     if (PtInRect(&togRc, pt)) { *outIdx = visIdx; return true; }
@@ -194,12 +206,12 @@ void LogPanel::PaintRow(HDC dc, const RECT& rc, int visIdx)
     // ── Timestamp column ──────────────────────────────────────────────────────
     SelectObject(dc, m_fontTs);
     SetTextColor(dc, LC::TsColor);
-    RECT tsRc = { 6, rc.top, k_tsW, rc.bottom };
+    RECT tsRc = { 6, rc.top, m_tsW, rc.bottom };
     DrawTextW(dc, e.timestamp.c_str(), -1, &tsRc,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     // ── Indent ────────────────────────────────────────────────────────────────
-    int textX = k_tsW + e.depth * k_indW;
+    int textX = m_tsW + e.depth * k_indW;
 
     // ── Toggle button ─────────────────────────────────────────────────────────
     if (e.isGroup) {
@@ -319,6 +331,7 @@ LRESULT CALLBACK LogPanel::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
         pThis->m_fontTs   = MakeFont(8, true);   // Consolas
         pThis->m_fontText = MakeFont(9, false);  // Segoe UI
+        pThis->ComputeTimestampWidth();
         // Bold header font
         LOGFONTW lf = {};
         lf.lfHeight  = -MulDiv(9, GetDeviceCaps(GetDC(nullptr), LOGPIXELSY), 72);

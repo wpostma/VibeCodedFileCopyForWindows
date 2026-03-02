@@ -49,9 +49,11 @@ private:
 
     static const int k_headerH = 28;
     static const int k_rowH    = 22;
-    static const int k_tsW     = 148;  // timestamp column width
     static const int k_indW    = 18;   // indent per depth level
     static const int k_togW    = 16;   // toggle [+/-] button width
+
+    int  m_tsW = 148;                  // timestamp column width (measured at runtime)
+    void ComputeTimestampWidth();      // called after m_fontTs is created
 
     HWND m_hwnd = nullptr;
 

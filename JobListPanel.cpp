@@ -82,6 +82,23 @@ void JobListPanel::Destroy()
     if (m_hwnd)     { DestroyWindow(m_hwnd); m_hwnd = nullptr; }
 }
 
+void JobListPanel::ComputeRowHeight()
+{
+    HDC dc = GetDC(m_hwnd);
+    TEXTMETRICW tm;
+    HFONT old = (HFONT)SelectObject(dc, m_fontName);
+    GetTextMetrics(dc, &tm);
+    m_nameH = tm.tmHeight;
+    SelectObject(dc, m_fontSub);
+    GetTextMetrics(dc, &tm);
+    m_subH = tm.tmHeight;
+    SelectObject(dc, old);
+    ReleaseDC(m_hwnd, dc);
+    m_gapH = max(3, m_subH / 3);
+    int pad = max(6, m_nameH * 6 / 10);
+    m_rowH  = pad + m_nameH + m_gapH + m_subH + pad;
+}
+
 void JobListPanel::Refresh() { if (m_hwnd) InvalidateRect(m_hwnd, nullptr, FALSE); }
 
 void JobListPanel::SetSelectedIndex(int i)
@@ -95,7 +112,7 @@ void JobListPanel::SetSelectedIndex(int i)
 int JobListPanel::HitTestRow(int y) const
 {
     int absY = y + m_scrollY;
-    int idx  = absY / k_rowH;
+    int idx  = m_rowH > 0 ? absY / m_rowH : -1;
     if (!m_jobs) return -1;
     int n = (int)m_jobs->size();
     return (idx >= 0 && idx < n) ? idx : -1;
@@ -105,9 +122,9 @@ void JobListPanel::ScrollBy(int lines)
 {
     if (!m_jobs) return;
     RECT rc; GetClientRect(m_hwnd, &rc);
-    int maxScroll = (int)m_jobs->size() * k_rowH - (rc.bottom - rc.top);
+    int maxScroll = (int)m_jobs->size() * m_rowH - (rc.bottom - rc.top);
     if (maxScroll < 0) maxScroll = 0;
-    m_scrollY = max(0, min(m_scrollY + lines * k_rowH, maxScroll));
+    m_scrollY = max(0, min(m_scrollY + lines * m_rowH, maxScroll));
     Refresh();
 }
 
@@ -152,13 +169,16 @@ void JobListPanel::PaintRow(HDC dc, const RECT& rc, int idx, bool selected)
     }
 
     SetBkMode(dc, TRANSPARENT);
-    const int padX = 12, padY = 9;
+    const int padX = 12;
+    // Vertical padding: whatever space remains above/below the two text lines
+    const int padY  = (m_rowH - m_nameH - m_gapH - m_subH) / 2;
+    const int row2Y = padY + m_nameH + m_gapH;
 
     // ── Row 1 left: job name ──────────────────────────────────────────────────
     SelectObject(dc, m_fontName);
     SetTextColor(dc, JC::TxtName);
     RECT r1L = { rc.left + padX, rc.top + padY,
-                 rc.right - 260, rc.top + padY + 18 };
+                 rc.right - 260, rc.top + padY + m_nameH };
     DrawTextW(dc, job.name.c_str(), -1, &r1L, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     // ── Row 1 right: "X hours ago · N changes · no errors" ────────────────────
@@ -174,7 +194,7 @@ void JobListPanel::PaintRow(HDC dc, const RECT& rc, int idx, bool selected)
         r1Right = L"Never run";
     }
     SetTextColor(dc, JC::TxtStats);
-    RECT r1R = { rc.left + padX, rc.top + padY, rc.right - padX, rc.top + padY + 18 };
+    RECT r1R = { rc.left + padX, rc.top + padY, rc.right - padX, rc.top + padY + m_nameH };
     DrawTextW(dc, r1Right.c_str(), -1, &r1R, DT_RIGHT | DT_SINGLELINE);
 
     // ── Row 2 left: "Next scan in..." or status ───────────────────────────────
@@ -185,8 +205,8 @@ void JobListPanel::PaintRow(HDC dc, const RECT& rc, int idx, bool selected)
     } else {
         r2Left = StatusLabel(job.status);
     }
-    RECT r2L = { rc.left + padX, rc.top + padY + 22,
-                 rc.right - 260, rc.top + padY + 38 };
+    RECT r2L = { rc.left + padX, rc.top + row2Y,
+                 rc.right - 260, rc.top + row2Y + m_subH };
     DrawTextW(dc, r2Left.c_str(), -1, &r2L, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     // ── Row 2 right: "Z GB · M files · N folders" ────────────────────────────
@@ -201,8 +221,8 @@ void JobListPanel::PaintRow(HDC dc, const RECT& rc, int idx, bool selected)
     }
     if (!r2Right.empty()) {
         SetTextColor(dc, JC::TxtSub);
-        RECT r2R = { rc.left + padX, rc.top + padY + 22,
-                     rc.right - padX, rc.top + padY + 38 };
+        RECT r2R = { rc.left + padX, rc.top + row2Y,
+                     rc.right - padX, rc.top + row2Y + m_subH };
         DrawTextW(dc, r2Right.c_str(), -1, &r2R, DT_RIGHT | DT_SINGLELINE);
     }
 }
@@ -228,8 +248,8 @@ void JobListPanel::OnPaint()
     if (m_jobs) {
         int n = (int)m_jobs->size();
         for (int i = 0; i < n; i++) {
-            int top    = i * k_rowH - m_scrollY;
-            int bottom = top + k_rowH;
+            int top    = i * m_rowH - m_scrollY;
+            int bottom = top + m_rowH;
             if (bottom < 0 || top > H) continue;
 
             RECT rowRc = { 0, top, W, bottom };
@@ -300,6 +320,7 @@ LRESULT CALLBACK JobListPanel::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         // Create fonts
         pThis->m_fontName = CreateFont_(10, true);
         pThis->m_fontSub  = CreateFont_( 9, false);
+        pThis->ComputeRowHeight();
         return 0;
     }
 

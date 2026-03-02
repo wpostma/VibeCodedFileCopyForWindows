@@ -56,7 +56,13 @@ private:
     int   m_selIdx   = -1;
     int   m_scrollY  = 0;       // pixel offset (scrolled up)
 
-    static const int k_rowH = 58;  // height per job card
+    // Row geometry — computed from actual font metrics in WM_CREATE
+    int   m_rowH    = 58;   // total row height
+    int   m_nameH   = 18;   // name-line text height (px)
+    int   m_subH    = 15;   // sub-line text height (px)
+    int   m_gapH    =  4;   // gap between the two lines
+
+    void  ComputeRowHeight();   // called after fonts are created
 
     // GDI resources
     HFONT m_fontName = nullptr;   // Segoe UI 10pt bold

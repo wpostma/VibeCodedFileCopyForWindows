@@ -6,26 +6,18 @@
 #include <vector>
 #include "CopyEngine.h"
 #include "resource.h"
+#include "utils.h"
 
 #pragma comment(lib, "shlwapi.lib")
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-static std::wstring NowTimestamp()
-{
-    SYSTEMTIME st; GetLocalTime(&st);
-    wchar_t buf[32];
-    swprintf_s(buf, L"%04d.%02d.%02d %02d:%02d:%02d",
-        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-    return buf;
-}
 
 static void PostLog(HWND hwnd, int idx, const std::wstring& text,
                     int depth = 0, bool isGroup = false, int parentIdx = -1)
 {
     auto* m      = new LogMsg;
     m->jobIndex  = idx;
-    m->timestamp = NowTimestamp();
+    m->timestamp = TimestampNow();
     m->text      = text;
     m->depth     = depth;
     m->isGroup   = isGroup;
@@ -227,6 +219,8 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
     int secs = (int)elapsed % 60;
     if (cancel->load())
         swprintf_s(summary, L"Stopped after %d min %d sec  (%llu errors)", mins, secs, stats.errorCount);
+    else if (stats.changeCount == 0 && stats.errorCount == 0)
+        swprintf_s(summary, L"Job run skipped. All files already up to date.");
     else if (stats.errorCount > 0)
         swprintf_s(summary, L"Completed in %d min %d sec  (%llu errors)", mins, secs, stats.errorCount);
     else

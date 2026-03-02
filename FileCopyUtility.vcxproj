@@ -107,6 +107,7 @@
     </Link>
     <Manifest>
       <EmbedManifest>true</EmbedManifest>
+      <AdditionalManifestFiles>$(ProjectDir)FileCopyUtility.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
     </Manifest>
   </ItemDefinitionGroup>
 
@@ -129,6 +130,10 @@
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>comctl32.lib;comdlg32.lib;shell32.lib;ole32.lib;shlwapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <Manifest>
+      <EmbedManifest>true</EmbedManifest>
+      <AdditionalManifestFiles>$(ProjectDir)FileCopyUtility.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
+    </Manifest>
   </ItemDefinitionGroup>
 
   <!-- ── Compiler: Debug | x64 ────────────────────────────────────────────── -->
@@ -147,6 +152,10 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>comctl32.lib;comdlg32.lib;shell32.lib;ole32.lib;shlwapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <Manifest>
+      <EmbedManifest>true</EmbedManifest>
+      <AdditionalManifestFiles>$(ProjectDir)FileCopyUtility.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
+    </Manifest>
   </ItemDefinitionGroup>
 
   <!-- ── Compiler: Release | x64 ──────────────────────────────────────────── -->
@@ -168,6 +177,10 @@
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>comctl32.lib;comdlg32.lib;shell32.lib;ole32.lib;shlwapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <Manifest>
+      <EmbedManifest>true</EmbedManifest>
+      <AdditionalManifestFiles>$(ProjectDir)FileCopyUtility.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
+    </Manifest>
   </ItemDefinitionGroup>
 
   <!-- ── Source files ──────────────────────────────────────────────────────── -->
@@ -190,10 +203,16 @@
     <ClInclude Include="JobListPanel.h" />
     <ClInclude Include="LogPanel.h" />
     <ClInclude Include="AddJobDlg.h" />
+    <ClInclude Include="utils.h" />
   </ItemGroup>
 
   <ItemGroup>
     <ResourceCompile Include="resources.rc" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="FileCopyUtility.ico" />
+    <None Include="FileCopyUtility.manifest" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
