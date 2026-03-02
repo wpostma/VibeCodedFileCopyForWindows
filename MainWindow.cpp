@@ -527,9 +527,10 @@ void MainWindow::CmdRunJob(int idx)
     // Fresh start — reset both flags and all runtime state
     job.cancelFlag->store(false);
     job.pauseFlag->store(false);
-    job.status     = JobStatus::Scanning;
-    job.stats      = {};
+    job.status        = JobStatus::Scanning;
+    job.stats         = {};
     job.logEntries.clear();
+    job.curFileLogIdx = -1;
 
     // Add initial log entry
     LogEntry le;
@@ -626,17 +627,35 @@ void MainWindow::OnJobProgress(int jobIdx, ProgressMsg* msg)
 void MainWindow::OnJobLog(int jobIdx, LogMsg* msg)
 {
     if (jobIdx >= 0 && jobIdx < (int)m_jobs.size()) {
-        LogEntry le;
-        le.timestamp = msg->timestamp;
-        le.text      = msg->text;
-        le.depth     = msg->depth;
-        le.isGroup   = msg->isGroup;
-        le.expanded  = true;
-        le.parentIdx = msg->parentIdx;
-        m_jobs[jobIdx]->logEntries.push_back(le);
+        auto& job = *m_jobs[jobIdx];
 
-        if (m_selJob == jobIdx)
-            m_logPanel.AppendEntry(le);
+        if (msg->replaceCurrentFile && job.curFileLogIdx >= 0) {
+            // Overwrite the existing live-file slot in place
+            LogEntry& le  = job.logEntries[job.curFileLogIdx];
+            le.timestamp  = msg->timestamp;
+            le.text       = msg->text;
+            le.text2      = msg->text2;
+            if (m_selJob == jobIdx)
+                m_logPanel.UpdateEntry(job.curFileLogIdx, le);
+        } else {
+            // Append a new entry
+            LogEntry le;
+            le.timestamp = msg->timestamp;
+            le.text      = msg->text;
+            le.text2     = msg->text2;
+            le.depth     = msg->depth;
+            le.isGroup   = msg->isGroup;
+            le.expanded  = true;
+            le.parentIdx = msg->parentIdx;
+            int newIdx = (int)job.logEntries.size();
+            job.logEntries.push_back(le);
+
+            if (m_selJob == jobIdx)
+                m_logPanel.AppendEntry(le);
+
+            if (msg->replaceCurrentFile)
+                job.curFileLogIdx = newIdx;   // record first live-file slot
+        }
     }
     delete msg;
 }

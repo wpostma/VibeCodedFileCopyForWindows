@@ -112,6 +112,14 @@ void LogPanel::AppendEntry(const LogEntry& entry)
     Refresh();
 }
 
+void LogPanel::UpdateEntry(int allIdx, const LogEntry& entry)
+{
+    if (allIdx < 0 || allIdx >= (int)m_all.size()) return;
+    m_all[allIdx] = entry;
+    // Entry count unchanged — no need to rebuild visible list, just repaint
+    Refresh();
+}
+
 void LogPanel::RebuildVisible()
 {
     m_vis.clear();
@@ -242,9 +250,29 @@ void LogPanel::PaintRow(HDC dc, const RECT& rc, int visIdx)
     SetTextColor(dc, txtColor);
     SelectObject(dc, m_fontText);
 
-    RECT tRc = { textX, rc.top, rc.right - 6, rc.bottom };
-    DrawTextW(dc, e.text.c_str(), -1, &tRc,
-              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (e.text2.empty()) {
+        RECT tRc = { textX, rc.top, rc.right - 6, rc.bottom };
+        DrawTextW(dc, e.text.c_str(), -1, &tRc,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    } else {
+        // Split: path on left half, filename on right half, with a divider
+        int avail = rc.right - 6 - textX;
+        int divX  = textX + avail / 2;
+
+        HPEN divPen = CreatePen(PS_SOLID, 1, RGB(200, 208, 225));
+        HPEN divOld = (HPEN)SelectObject(dc, divPen);
+        MoveToEx(dc, divX - 6, rc.top + 4, nullptr);
+        LineTo  (dc, divX - 6, rc.bottom - 4);
+        SelectObject(dc, divOld);
+        DeleteObject(divPen);
+
+        RECT pathRc = { textX,      rc.top, divX - 10,    rc.bottom };
+        RECT fileRc = { divX,       rc.top, rc.right - 6, rc.bottom };
+        DrawTextW(dc, e.text.c_str(),  -1, &pathRc,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        DrawTextW(dc, e.text2.c_str(), -1, &fileRc,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
 }
 
 void LogPanel::OnPaint()

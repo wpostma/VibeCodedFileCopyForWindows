@@ -23,6 +23,8 @@ public:
     void LoadJob(const std::vector<LogEntry>& entries);
     // Append a single new entry (call after LoadJob when job is running)
     void AppendEntry(const LogEntry& entry);
+    // Overwrite an existing entry in place (for the live current-file slot)
+    void UpdateEntry(int allIdx, const LogEntry& entry);
     void Clear();
 
     void Refresh() { if (m_hwnd) InvalidateRect(m_hwnd, nullptr, FALSE); }

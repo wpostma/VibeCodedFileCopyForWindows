@@ -12,6 +12,21 @@
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+static void PostCurrentFile(HWND hwnd, int idx,
+                            const std::wstring& dir, const std::wstring& filename)
+{
+    auto* m = new LogMsg;
+    m->jobIndex  = idx;
+    m->timestamp = TimestampNow();
+    m->text      = dir;
+    m->text2     = filename;
+    m->depth     = 2;
+    m->isGroup   = false;
+    m->parentIdx = -1;
+    m->replaceCurrentFile = true;
+    PostMessageW(hwnd, WM_JOB_LOG, (WPARAM)idx, (LPARAM)m);
+}
+
 static void PostLog(HWND hwnd, int idx, const std::wstring& text,
                     int depth = 0, bool isGroup = false, int parentIdx = -1)
 {
@@ -208,6 +223,21 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
 
         stats.changeCount++;
         stats.totalBytes += f.size;  // ensure counted
+
+        // Show which file is being copied (path | filename split display)
+        {
+            std::wstring dir  = f.relPath;
+            std::wstring file;
+            size_t slash = dir.rfind(L'\\');
+            if (slash != std::wstring::npos) {
+                file = dir.substr(slash + 1);
+                dir.resize(slash);
+            } else {
+                file = dir;
+                dir.clear();
+            }
+            PostCurrentFile(hwnd, idx, dir, file);
+        }
 
         BOOL  cancelled = FALSE;
         DWORD flags     = COPY_FILE_ALLOW_DECRYPTED_DESTINATION;

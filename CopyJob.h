@@ -11,8 +11,9 @@ enum class JobStatus { Idle, Scanning, Copying, Paused, Done, Error, Stopped };
 
 // ── Log entry (one row in the log panel) ─────────────────────────────────────
 struct LogEntry {
-    std::wstring timestamp;   // e.g. L"2026.03.01 11:56:43"
+    std::wstring timestamp;   // e.g. L"2026.03.01 11:56:43.mmm"
     std::wstring text;
+    std::wstring text2;       // secondary text rendered right of a divider (filename)
     int          depth      = 0;      // 0 = root, 1 = child, 2 = grandchild
     bool         isGroup    = false;  // shows [+]/[-] toggle
     bool         expanded   = true;
@@ -46,6 +47,9 @@ struct CopyJob {
     std::wstring  nextRunTime;    // e.g. L"in 14 hours"
     std::vector<LogEntry> logEntries;
 
+    // Log slot for the live "current file" row (main-thread only)
+    int curFileLogIdx = -1;
+
     // Thread control
     HANDLE                               threadHandle = nullptr;
     std::shared_ptr<std::atomic<bool>>   cancelFlag
@@ -66,7 +70,9 @@ struct LogMsg {
     int          jobIndex;
     std::wstring timestamp;
     std::wstring text;
-    int          depth;
-    bool         isGroup;
-    int          parentIdx;
+    std::wstring text2;              // non-empty → split path | filename display
+    int          depth      = 0;
+    bool         isGroup    = false;
+    int          parentIdx  = -1;
+    bool         replaceCurrentFile = false;  // overwrite the live file slot
 };
