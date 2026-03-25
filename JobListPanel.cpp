@@ -208,6 +208,11 @@ void JobListPanel::PaintRow(HDC dc, const RECT& rc, int idx, bool selected)
     std::wstring r2Left;
     if (job.status == JobStatus::Idle || job.status == JobStatus::Done) {
         r2Left = job.nextRunTime.empty() ? L"Ready" : (L"Next scan " + job.nextRunTime);
+    } else if (job.status == JobStatus::Copying && job.stats.totalBytes > 0) {
+        int pct = (int)(job.stats.copiedBytes * 100 / job.stats.totalBytes);
+        wchar_t buf[64];
+        swprintf_s(buf, L"Copying... (%d%% complete)", pct);
+        r2Left = buf;
     } else {
         r2Left = StatusLabel(job.status);
     }

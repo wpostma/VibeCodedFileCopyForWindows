@@ -317,8 +317,8 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
 
         stats.changeCount++;
 
-        // Log every 100th change so we can spot runaway counts
-        if (stats.changeCount <= 3 || stats.changeCount % 100 == 0) {
+        // Log every 1000th change so we can spot runaway counts
+        if (stats.changeCount <= 3 || stats.changeCount % 1000 == 0) {
             wchar_t dbg[128];
             swprintf_s(dbg, L"change #%llu  (copiedFiles=%llu)", stats.changeCount, stats.copiedFiles);
             PostLog(hwnd, idx, dbg, 2);
@@ -371,7 +371,11 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
     else if (stats.changeCount == 0 && stats.errorCount == 0)
         swprintf_s(summary, L"All %llu files already up to date.", stats.totalFiles);
     else if (stats.errorCount > 0)
-        swprintf_s(summary, L"Completed in %d min %d sec  (%llu errors)", mins, secs, stats.errorCount);
+        swprintf_s(summary, L"Completed in %d min %d sec  (%llu errors, %llu skipped)",
+                   mins, secs, stats.errorCount, stats.skippedFiles);
+    else if (stats.skippedFiles > 0)
+        swprintf_s(summary, L"Completed in %d min %d sec  (%llu skipped, no errors)",
+                   mins, secs, stats.skippedFiles);
     else
         swprintf_s(summary, L"Completed in %d min %d sec with no errors", mins, secs);
 
@@ -396,6 +400,9 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
         PostMessageW(hwnd, WM_JOB_DONE, (WPARAM)idx, (LPARAM)1);
     }
 
+#ifdef _DEBUG
+    Log(L"[CopyThreadProc End]");
+#endif
     return 0;
 }
 
@@ -403,6 +410,9 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
 
 HANDLE StartCopyEngine(const EngineParams& params)
 {
+#ifdef _DEBUG
+    Log(L"[StartCopyEngine] %s -> %s", params.sourcePath, params.destPath);
+#endif
     auto* ep = new EngineParams(params);
     HANDLE h = CreateThread(nullptr, 0, CopyThreadProc, ep, 0, nullptr);
     if (!h) delete ep;
