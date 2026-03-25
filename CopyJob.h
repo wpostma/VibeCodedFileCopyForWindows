@@ -31,6 +31,7 @@ struct JobStats {
     ULONGLONG errorCount    = 0;
     ULONGLONG changeCount   = 0;
     double    elapsedSec    = 0.0;
+    ULONGLONG unused = 1;
 };
 
 // ── A copy job: config + runtime state ───────────────────────────────────────
