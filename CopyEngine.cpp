@@ -11,6 +11,9 @@
 
 #pragma comment(lib, "shlwapi.lib")
 
+static constexpr int kCopyWorkers = 2;
+static constexpr ULONGLONG kMinFreeBytes = 200ULL * 1024 * 1024;  // 200 MB
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // All three posting helpers are nothrow: any allocation or copy failure silently
@@ -38,9 +41,8 @@ static void PostLog(HWND hwnd, int idx, const std::wstring& text,
                     int depth = 0, bool isGroup = false, int parentIdx = -1)
 {
     try {
-
 #ifdef _DEBUG
-         Log(L"[PostLog] %s", text.c_str());
+        Log(L"[PostLog] %s", text.c_str());
 #endif
         auto* m      = new LogMsg;
         m->jobIndex  = idx;
@@ -66,36 +68,25 @@ static void PostProgress(HWND hwnd, int idx, const JobStats& stats, JobStatus st
 
 // ── Long-path helpers ─────────────────────────────────────────────────────────
 
-// Prepend the \\?\ prefix so all file operations bypass the MAX_PATH (260-char)
-// limit.  Requires longPathAware=true in the manifest AND the OS registry setting
-// HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled=1 (Windows 10
-// 1607+).  Safe to call on paths that are already prefixed.
 static std::wstring ToLongPath(const std::wstring& p)
 {
-    // Already a \\?\ or \\.\  (device/long-path) prefix — leave it alone.
     if (p.size() >= 4 && p[0] == L'\\' && p[1] == L'\\' &&
         (p[2] == L'?' || p[2] == L'.') && p[3] == L'\\')
         return p;
 
-    // UNC path  \\server\share\…  →  \\?\UNC\server\share\…
     if (p.size() >= 2 && p[0] == L'\\' && p[1] == L'\\')
         return L"\\\\?\\UNC\\" + p.substr(2);
 
-    // Ordinary absolute path  C:\…  →  \\?\C:\…
     return L"\\\\?\\" + p;
 }
 
-// CreateDirectoryW (unlike SHCreateDirectoryExW) accepts the \\?\ prefix.
-// Recurse to create intermediate directories the same way.
 static void EnsureDirectoryExists(const std::wstring& path)
 {
     if (CreateDirectoryW(path.c_str(), nullptr)) return;
     DWORD err = GetLastError();
     if (err == ERROR_ALREADY_EXISTS) return;
-    if (err != ERROR_PATH_NOT_FOUND)  return;  // unrecoverable (permissions, etc.)
+    if (err != ERROR_PATH_NOT_FOUND)  return;
 
-    // Create the parent first.  Guard against recursing past the root of a
-    // \\?\-prefixed path (minimum meaningful length: "\\?\X:\" = 7 chars).
     size_t slash = path.rfind(L'\\');
     if (slash == std::wstring::npos || slash <= 6) return;
 
@@ -105,7 +96,6 @@ static void EnsureDirectoryExists(const std::wstring& path)
 
 // ── File enumeration ──────────────────────────────────────────────────────────
 
-// RAII wrapper so FindClose is called even if an exception unwinds the stack.
 struct FindGuard {
     HANDLE h;
     explicit FindGuard(HANDLE h) : h(h) {}
@@ -115,7 +105,7 @@ struct FindGuard {
 };
 
 struct FileEntry {
-    std::wstring relPath;   // relative to source root
+    std::wstring relPath;
     FILETIME     lastWrite;
     ULONGLONG    size;
     bool         isDir;
@@ -128,12 +118,10 @@ static void EnumerateDir(const std::wstring& root, const std::wstring& rel,
     WIN32_FIND_DATAW fd;
     FindGuard guard(FindFirstFileW(pattern.c_str(), &fd));
     if (guard.h == INVALID_HANDLE_VALUE) return;
-    // FindClose is now guaranteed via guard's destructor, even if push_back throws.
 
     do {
         if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0)
             continue;
-        // Skip Windows reserved device name — cannot be a real file
         if (_wcsicmp(fd.cFileName, L"nul") == 0)
             continue;
 
@@ -161,58 +149,182 @@ static void EnumerateDir(const std::wstring& root, const std::wstring& rel,
     } while (FindNextFileW(guard.h, &fd));
 }
 
-// ── CopyFileEx progress callback ──────────────────────────────────────────────
+// ── Parallel copy infrastructure ─────────────────────────────────────────────
 
-struct CopyCallbackCtx {
-    HWND                               hwnd;
-    int                                jobIndex;
-    JobStats*                          stats;
-    std::shared_ptr<std::atomic<bool>> cancelFlag;
+struct CopyWorkItem {
+    std::wstring srcFull;
+    std::wstring dstFull;
+    std::wstring relPath;   // for logging
+    ULONGLONG    size;
 };
 
-static DWORD CALLBACK CopyProgressCB(
-    LARGE_INTEGER TotalFileSize, LARGE_INTEGER TotalBytesTransferred,
+// Shared state between scanner thread and copy workers.
+// The scanner pushes work items; workers pop and copy.
+struct SharedCopyState {
+    CRITICAL_SECTION       cs;
+    CONDITION_VARIABLE     cv;
+
+    // Work queue (scanner pushes, workers pop via nextItem index)
+    std::vector<CopyWorkItem> items;
+    size_t                    nextItem = 0;
+    bool                      scanDone = false;
+
+    // Aggregate stats (protected by cs)
+    JobStats stats;
+
+    // Immutable after construction
+    HWND hwnd;
+    int  jobIndex;
+    std::shared_ptr<std::atomic<bool>> cancelFlag;
+    std::shared_ptr<std::atomic<bool>> pauseFlag;
+};
+
+// ── Worker copy-progress callback ────────────────────────────────────────────
+
+struct WorkerCBCtx {
+    SharedCopyState* shared;
+    ULONGLONG        prevBytesThisFile;   // track delta per callback
+};
+
+static DWORD CALLBACK WorkerCopyProgressCB(
+    LARGE_INTEGER /*TotalFileSize*/, LARGE_INTEGER TotalBytesTransferred,
     LARGE_INTEGER, LARGE_INTEGER, DWORD, DWORD dwCallbackReason,
     HANDLE, HANDLE, LPVOID lpData)
 {
-    auto* ctx = reinterpret_cast<CopyCallbackCtx*>(lpData);
-    if (ctx->cancelFlag->load()) return PROGRESS_CANCEL;
+    auto* ctx = reinterpret_cast<WorkerCBCtx*>(lpData);
+    if (ctx->shared->cancelFlag->load()) return PROGRESS_CANCEL;
 
     if (dwCallbackReason == CALLBACK_CHUNK_FINISHED ||
         dwCallbackReason == CALLBACK_STREAM_SWITCH)
     {
-        ctx->stats->copiedBytes = (ULONGLONG)TotalBytesTransferred.QuadPart;
-        PostProgress(ctx->hwnd, ctx->jobIndex, *ctx->stats, JobStatus::Copying);
+        ULONGLONG transferred = (ULONGLONG)TotalBytesTransferred.QuadPart;
+        ULONGLONG delta = transferred - ctx->prevBytesThisFile;
+        ctx->prevBytesThisFile = transferred;
+
+        EnterCriticalSection(&ctx->shared->cs);
+        ctx->shared->stats.copiedBytes += delta;
+        JobStats snapshot = ctx->shared->stats;
+        LeaveCriticalSection(&ctx->shared->cs);
+
+        PostProgress(ctx->shared->hwnd, ctx->shared->jobIndex,
+                     snapshot, JobStatus::Copying);
     }
     return PROGRESS_CONTINUE;
 }
 
-// ── Thread entry point ────────────────────────────────────────────────────────
+// ── Copy worker thread ───────────────────────────────────────────────────────
+
+static DWORD WINAPI CopyWorkerProc(LPVOID lpParam)
+{
+    auto* st = reinterpret_cast<SharedCopyState*>(lpParam);
+
+    while (true) {
+        if (st->cancelFlag->load()) break;
+
+        // Honour pause — spin-wait until cleared
+        while (st->pauseFlag->load() && !st->cancelFlag->load())
+            Sleep(50);
+        if (st->cancelFlag->load()) break;
+
+        // ── Pull next work item ──────────────────────────────────────────
+        CopyWorkItem item;
+        bool gotItem = false;
+
+        EnterCriticalSection(&st->cs);
+        while (st->nextItem >= st->items.size() && !st->scanDone
+               && !st->cancelFlag->load())
+        {
+            SleepConditionVariableCS(&st->cv, &st->cs, 100);
+        }
+        if (st->nextItem < st->items.size()) {
+            item = std::move(st->items[st->nextItem]);
+            st->nextItem++;
+            gotItem = true;
+        }
+        LeaveCriticalSection(&st->cs);
+
+        if (!gotItem) break;   // queue drained + scanDone, or cancelled
+
+        // ── Show current file in log panel ───────────────────────────────
+        {
+            std::wstring dir  = item.relPath;
+            std::wstring file;
+            size_t slash = dir.rfind(L'\\');
+            if (slash != std::wstring::npos) {
+                file = dir.substr(slash + 1);
+                dir.resize(slash);
+            } else {
+                file = dir;
+                dir.clear();
+            }
+            PostCurrentFile(st->hwnd, st->jobIndex, dir, file);
+        }
+
+        // ── Copy the file ────────────────────────────────────────────────
+        WorkerCBCtx cbCtx{ st, 0 };
+        BOOL  cancelled = FALSE;
+        DWORD flags     = COPY_FILE_ALLOW_DECRYPTED_DESTINATION;
+        BOOL  ok        = CopyFileExW(item.srcFull.c_str(), item.dstFull.c_str(),
+                                      WorkerCopyProgressCB, &cbCtx,
+                                      &cancelled, flags);
+
+        // ── Update shared stats ──────────────────────────────────────────
+        EnterCriticalSection(&st->cs);
+        if (!ok && !cancelled) {
+            st->stats.errorCount++;
+        } else if (!cancelled) {
+            st->stats.copiedFiles++;
+            // Credit any bytes the callback didn't report (small files
+            // may complete in a single chunk with no callback).
+            ULONGLONG remaining = item.size - cbCtx.prevBytesThisFile;
+            st->stats.copiedBytes += remaining;
+        }
+        JobStats snapshot = st->stats;
+        LeaveCriticalSection(&st->cs);
+
+        if (!ok && !cancelled) {
+            DWORD err = GetLastError();
+            wchar_t msg[300];
+            swprintf_s(msg, L"Error copying %s  (0x%08X)",
+                       item.relPath.c_str(), err);
+            PostLog(st->hwnd, st->jobIndex, msg, 2);
+        } else if (!cancelled) {
+            PostProgress(st->hwnd, st->jobIndex, snapshot, JobStatus::Copying);
+
+            // Auto-stop if destination drive is critically low (< 200 MB).
+            // Only check every 200 files to avoid hammering the filesystem.
+            if (snapshot.copiedFiles % 200 == 0) {
+                ULARGE_INTEGER freeBytes = {};
+                if (GetDiskFreeSpaceExW(item.dstFull.c_str(), nullptr, nullptr, &freeBytes)
+                    && freeBytes.QuadPart < kMinFreeBytes)
+                {
+                    st->cancelFlag->store(true);
+                    PostLog(st->hwnd, st->jobIndex,
+                            L"Auto-stopped: destination drive below 200 MB free", 1);
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
+// ── Scanner / orchestrator thread ────────────────────────────────────────────
 
 static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
 {
-    // Capture the plain-data fields before anything can throw, so the catch
-    // blocks below always have a valid hwnd/idx to post WM_JOB_DONE.
     auto* rawEp = reinterpret_cast<EngineParams*>(lpParam);
     HWND hwnd = rawEp->hwndMain;
     int  idx  = rawEp->jobIndex;
 
     try {
-    // unique_ptr owns rawEp so it's freed whether or not the wstring copy throws.
     std::unique_ptr<EngineParams> epOwner(rawEp);
-    EngineParams params = *epOwner;   // deep-copies wstrings — may throw bad_alloc
-    epOwner.reset();                  // delete now; params holds everything we need
+    EngineParams params = *epOwner;
+    epOwner.reset();
 
-    // Prefix source and dest with \\?\ so all downstream file operations
-    // (FindFirstFileW, CopyFileExW, GetFileAttributesExW, CreateDirectoryW)
-    // can handle paths longer than MAX_PATH (260 chars).
     params.sourcePath = ToLongPath(params.sourcePath);
     params.destPath   = ToLongPath(params.destPath);
 
-    // Strip trailing backslash to avoid double separators in \\?\ paths.
-    // \\?\ disables Win32 path normalisation, so "\\?\C:\dir\\*" is NOT
-    // collapsed the way "C:\dir\\*" would be — FindFirstFileW fails silently.
-    // Guard: keep the backslash for bare drive root \\?\X:\ (7 chars).
     auto stripTrailingSlash = [](std::wstring& p) {
         while (p.size() > 7 && p.back() == L'\\')
             p.pop_back();
@@ -224,14 +336,9 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
     auto&  pause   = params.pauseFlag;
 
     ULONGLONG startTick = GetTickCount64();
-    JobStats  stats     = {};
 
-    // ── Log: start ────────────────────────────────────────────────────────────
-    int runRoot = -1;   // we track parentIdx by sequential log count on receiver side
-                        // For simplicity we pass depth only; UI rebuilds the tree
+    // ── Phase 1: Enumerate ───────────────────────────────────────────────
     PostLog(hwnd, idx, L"Running the backup...", 0, true);
-
-    // ── Phase 1: Prepare / enumerate ─────────────────────────────────────────
     PostLog(hwnd, idx, L"Preparing...", 1, true);
 
     std::vector<FileEntry> files;
@@ -243,46 +350,65 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
         return 0;
     }
 
+    // ── Set up shared state ──────────────────────────────────────────────
+    SharedCopyState shared;
+    InitializeCriticalSection(&shared.cs);
+    InitializeConditionVariable(&shared.cv);
+    shared.hwnd       = hwnd;
+    shared.jobIndex   = idx;
+    shared.cancelFlag = cancel;
+    shared.pauseFlag  = pause;
+    memset(&shared.stats, 0, sizeof(shared.stats));
+
     // Count totals
     for (auto& f : files) {
-        if (f.isDir)  stats.totalFolders++;
-        else {        stats.totalFiles++; stats.totalBytes += f.size; }
+        if (f.isDir)  shared.stats.totalFolders++;
+        else {        shared.stats.totalFiles++; shared.stats.totalBytes += f.size; }
     }
-    stats.changeCount = 0;
 
     {
         wchar_t dbg[256];
-        swprintf_s(dbg, L"Enumerated %llu files, %llu folders, %llu bytes  (changeCount=%llu)",
-                   stats.totalFiles, stats.totalFolders, stats.totalBytes, stats.changeCount);
+        swprintf_s(dbg, L"Enumerated %llu files, %llu folders, %llu bytes",
+                   shared.stats.totalFiles, shared.stats.totalFolders,
+                   shared.stats.totalBytes);
         PostLog(hwnd, idx, dbg, 1);
     }
 
-    // ── Phase 2: Compare & copy ───────────────────────────────────────────────
+    // ── Pre-flight disk space check ──────────────────────────────────────
+    // If free space on dest is less than total source size, ask the user
+    // before proceeding (most data may already be there, so it's a warning,
+    // not a hard block).
+    {
+        ULARGE_INTEGER freeBytes = {};
+        if (GetDiskFreeSpaceExW(params.destPath.c_str(), nullptr, nullptr, &freeBytes)
+            && freeBytes.QuadPart < shared.stats.totalBytes)
+        {
+            SpaceCheckInfo info{ freeBytes.QuadPart, shared.stats.totalBytes };
+            // SendMessageW blocks this thread until the UI thread responds.
+            LRESULT answer = SendMessageW(hwnd, WM_JOB_SPACE_CHECK,
+                                          (WPARAM)idx, (LPARAM)&info);
+            if (answer != IDYES) {
+                PostLog(hwnd, idx, L"Stopped: user declined (low disk space)", 1);
+                PostProgress(hwnd, idx, shared.stats, JobStatus::Stopped);
+                PostMessageW(hwnd, WM_JOB_DONE, (WPARAM)idx, 0);
+                DeleteCriticalSection(&shared.cs);
+                return 0;
+            }
+        }
+    }
+
+    // ── Launch copy workers ──────────────────────────────────────────────
+    HANDLE workers[kCopyWorkers] = {};
+    for (int i = 0; i < kCopyWorkers; i++)
+        workers[i] = CreateThread(nullptr, 0, CopyWorkerProc, &shared, 0, nullptr);
+
+    // ── Phase 2: Compare & enqueue ───────────────────────────────────────
     PostLog(hwnd, idx, L"Processing...", 1, true);
 
-    CopyCallbackCtx cbCtx{ hwnd, idx, &stats, cancel };
-
-    bool wasPaused = false;
     for (auto& f : files) {
         if (cancel->load()) break;
 
-        // Pause: wait between files until the flag clears
-        if (pause->load()) {
-            if (!wasPaused) {
-                PostProgress(hwnd, idx, stats, JobStatus::Paused);
-                wasPaused = true;
-            }
-            while (pause->load() && !cancel->load())
-                Sleep(50);
-            if (!cancel->load()) {
-                PostProgress(hwnd, idx, stats, JobStatus::Copying);
-                wasPaused = false;
-            }
-        }
-        if (cancel->load()) break;
-
-        std::wstring srcFull  = params.sourcePath + L"\\" + f.relPath;
-        std::wstring dstFull  = params.destPath   + L"\\" + f.relPath;
+        std::wstring dstFull = params.destPath + L"\\" + f.relPath;
 
         if (f.isDir) {
             CreateDirectoryW(dstFull.c_str(), nullptr);
@@ -299,65 +425,49 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
                 dstSz.HighPart = dstAttr.nFileSizeHigh;
                 if (dstSz.QuadPart == f.size) {
                     needsCopy = false;
-                    stats.skippedFiles++;
+                    EnterCriticalSection(&shared.cs);
+                    shared.stats.skippedFiles++;
+                    LeaveCriticalSection(&shared.cs);
                 }
             }
         }
 
         if (!needsCopy) continue;
 
-        // Ensure destination directory exists
+        // Ensure destination directory exists (before enqueuing)
         std::wstring dstDir = dstFull;
         size_t slash = dstDir.rfind(L'\\');
         if (slash != std::wstring::npos) {
             dstDir.resize(slash);
-            // CreateDirectoryW accepts \\?\ prefix; SHCreateDirectoryExW does not.
             EnsureDirectoryExists(dstDir);
         }
 
-        stats.changeCount++;
+        std::wstring srcFull = params.sourcePath + L"\\" + f.relPath;
 
-        // Log every 1000th change so we can spot runaway counts
-        if (stats.changeCount <= 3 || stats.changeCount % 1000 == 0) {
-            wchar_t dbg[128];
-            swprintf_s(dbg, L"change #%llu  (copiedFiles=%llu)", stats.changeCount, stats.copiedFiles);
-            PostLog(hwnd, idx, dbg, 2);
-        }
-
-        // Show which file is being copied (path | filename split display)
-        {
-            std::wstring dir  = f.relPath;
-            std::wstring file;
-            size_t slash = dir.rfind(L'\\');
-            if (slash != std::wstring::npos) {
-                file = dir.substr(slash + 1);
-                dir.resize(slash);
-            } else {
-                file = dir;
-                dir.clear();
-            }
-            PostCurrentFile(hwnd, idx, dir, file);
-        }
-
-        BOOL  cancelled = FALSE;
-        DWORD flags     = COPY_FILE_ALLOW_DECRYPTED_DESTINATION;
-        BOOL  ok        = CopyFileExW(srcFull.c_str(), dstFull.c_str(),
-                                      CopyProgressCB, &cbCtx, &cancelled, flags);
-
-        if (!ok && !cancelled) {
-            stats.errorCount++;
-            DWORD err = GetLastError();
-            wchar_t msg[300];
-            swprintf_s(msg, L"Error copying %s  (0x%08X)", f.relPath.c_str(), err);
-            PostLog(hwnd, idx, msg, 2);
-        } else if (!cancelled) {
-            stats.copiedFiles++;
-            stats.copiedBytes += f.size;
-            PostProgress(hwnd, idx, stats, JobStatus::Copying);
-        }
+        EnterCriticalSection(&shared.cs);
+        shared.stats.changeCount++;
+        shared.stats.bytesToCopy += f.size;
+        shared.items.push_back({ std::move(srcFull), std::move(dstFull),
+                                 f.relPath, f.size });
+        LeaveCriticalSection(&shared.cs);
+        WakeConditionVariable(&shared.cv);   // wake one worker
     }
 
-    // ── Phase 3: Done ─────────────────────────────────────────────────────────
+    // Signal workers: no more items coming
+    EnterCriticalSection(&shared.cs);
+    shared.scanDone = true;
+    LeaveCriticalSection(&shared.cs);
+    WakeAllConditionVariable(&shared.cv);
+
+    // Wait for workers to finish
+    WaitForMultipleObjects(kCopyWorkers, workers, TRUE, INFINITE);
+    for (int i = 0; i < kCopyWorkers; i++)
+        if (workers[i]) CloseHandle(workers[i]);
+
+    // ── Phase 3: Done ────────────────────────────────────────────────────
+    JobStats stats = shared.stats;
+    DeleteCriticalSection(&shared.cs);
+
     double elapsed = (GetTickCount64() - startTick) / 1000.0;
     stats.elapsedSec = elapsed;
 
@@ -386,13 +496,11 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
 
     } // end try
     catch (const std::exception& ex) {
-        // Best-effort: log the error (PostLog is itself nothrow)
         try {
             wchar_t msg[256];
             swprintf_s(msg, L"Copy thread exception: %hs", ex.what());
             PostLog(hwnd, idx, msg, 1);
         } catch (...) {}
-        // Guaranteed: always unblock the main window
         PostMessageW(hwnd, WM_JOB_DONE, (WPARAM)idx, (LPARAM)1);
     }
     catch (...) {
@@ -400,9 +508,6 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
         PostMessageW(hwnd, WM_JOB_DONE, (WPARAM)idx, (LPARAM)1);
     }
 
-#ifdef _DEBUG
-    Log(L"[CopyThreadProc End]");
-#endif
     return 0;
 }
 
@@ -411,7 +516,8 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
 HANDLE StartCopyEngine(const EngineParams& params)
 {
 #ifdef _DEBUG
-    Log(L"[StartCopyEngine] %s -> %s", params.sourcePath, params.destPath);
+    Log(L"[StartCopyEngine] src='%s' dst='%s'", params.sourcePath.c_str(),
+        params.destPath.c_str());
 #endif
     auto* ep = new EngineParams(params);
     HANDLE h = CreateThread(nullptr, 0, CopyThreadProc, ep, 0, nullptr);

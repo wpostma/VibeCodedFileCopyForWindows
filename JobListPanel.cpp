@@ -208,10 +208,67 @@ void JobListPanel::PaintRow(HDC dc, const RECT& rc, int idx, bool selected)
     std::wstring r2Left;
     if (job.status == JobStatus::Idle || job.status == JobStatus::Done) {
         r2Left = job.nextRunTime.empty() ? L"Ready" : (L"Next scan " + job.nextRunTime);
-    } else if (job.status == JobStatus::Copying && job.stats.totalBytes > 0) {
-        int pct = (int)(job.stats.copiedBytes * 100 / job.stats.totalBytes);
-        wchar_t buf[64];
-        swprintf_s(buf, L"Copying... (%d%% complete)", pct);
+    } else if (job.status == JobStatus::Copying && job.stats.bytesToCopy > 0
+               && job.stats.copiedBytes > 0) {
+        int pct = (int)(job.stats.copiedBytes * 100 / job.stats.bytesToCopy);
+        if (pct > 100) pct = 100;
+
+        // Estimate end time from copy rate
+        ULONGLONG elapsed = GetTickCount64() - job.runStartTick;
+        std::wstring eta;
+        if (elapsed > 3000 && job.stats.copiedBytes > 0) {
+            // remaining ms = elapsed * bytesLeft / bytesDone
+            ULONGLONG bytesLeft = job.stats.bytesToCopy - job.stats.copiedBytes;
+            ULONGLONG remainMs  = elapsed * bytesLeft / job.stats.copiedBytes;
+
+            // Add 15 min padding, then round up to nearest 15 min.
+            remainMs += 15ULL * 60 * 1000;
+
+            SYSTEMTIME now;
+            GetLocalTime(&now);
+            FILETIME ft;
+            SystemTimeToFileTime(&now, &ft);
+            ULARGE_INTEGER uli;
+            uli.LowPart  = ft.dwLowDateTime;
+            uli.HighPart = ft.dwHighDateTime;
+            uli.QuadPart += remainMs * 10000ULL;   // FILETIME = 100ns ticks
+            ft.dwLowDateTime  = uli.LowPart;
+            ft.dwHighDateTime = uli.HighPart;
+            SYSTEMTIME st;
+            FileTimeToSystemTime(&ft, &st);
+
+            // Round up to next 15-minute boundary
+            int m = st.wMinute;
+            if (st.wSecond > 0 || st.wMilliseconds > 0)
+                m++;   // any partial minute counts as next
+            int rounded = ((m + 14) / 15) * 15;  // ceil to 15
+            int extraMin = rounded - st.wMinute;
+            if (extraMin > 0) {
+                uli.LowPart  = ft.dwLowDateTime;
+                uli.HighPart = ft.dwHighDateTime;
+                uli.QuadPart += (ULONGLONG)extraMin * 60ULL * 10000000ULL;
+                ft.dwLowDateTime  = uli.LowPart;
+                ft.dwHighDateTime = uli.HighPart;
+                FileTimeToSystemTime(&ft, &st);
+            }
+            st.wSecond = 0; st.wMilliseconds = 0;
+
+            int h12  = st.wHour % 12;
+            if (h12 == 0) h12 = 12;
+            const wchar_t* ampm = (st.wHour < 12) ? L"AM" : L"PM";
+
+            wchar_t etaBuf[64];
+            if (st.wYear == now.wYear && st.wMonth == now.wMonth && st.wDay == now.wDay)
+                swprintf_s(etaBuf, L", est. done by %d:%02d %s",
+                           h12, st.wMinute, ampm);
+            else
+                swprintf_s(etaBuf, L", est. done by %d:%02d %s %d/%d",
+                           h12, st.wMinute, ampm, st.wMonth, st.wDay);
+            eta = etaBuf;
+        }
+
+        wchar_t buf[128];
+        swprintf_s(buf, L"Copying... (%d%% complete%s)", pct, eta.c_str());
         r2Left = buf;
     } else {
         r2Left = StatusLabel(job.status);

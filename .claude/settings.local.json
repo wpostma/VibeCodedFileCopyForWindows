@@ -4,7 +4,10 @@
       "Bash(cmd:*)",
       "Bash(\"C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe\":*)",
       "Bash(powershell:*)",
-      "Bash(MSYS_NO_PATHCONV=1 \"/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe\":*)"
+      "Bash(MSYS_NO_PATHCONV=1 \"/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe\":*)",
+      "Bash(python3:*)",
+      "Bash(MSYS_NO_PATHCONV=1 \"/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe\" \"C:\\\\\\\\vsdev\\\\\\\\FileCopyUtility\\\\\\\\FileCopyUtility.vcxproj\" /p:Configuration=Release /p:Platform=x64 /m /nologo /v:minimal 2>&1)",
+      "Bash(MSYS_NO_PATHCONV=1 \"/c/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe\" \"C:\\\\\\\\vsdev\\\\\\\\FileCopyUtility\\\\\\\\FileCopyUtility.vcxproj\" /p:Configuration=Debug /p:Platform=x64 /m /nologo /v:minimal 2>&1)"
     ]
   }
 }

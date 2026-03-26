@@ -57,6 +57,7 @@ private:
     void RepositionChildren();
     void UpdateStatusBar();
     void UpdateJobSelection();
+    void RefreshLogPanel();          // build combined log from all jobs
     bool IsInSplitter(int y) const;
 
     // Status strip (custom painted)
@@ -78,7 +79,8 @@ private:
 
     // Jobs
     std::vector<std::unique_ptr<CopyJob>> m_jobs;
-    int m_selJob = -1;   // currently selected job index
+    int m_selJob = -1;           // currently selected job index
+    ULONGLONG m_lastLogRefresh = 0;  // throttle combined-log rebuilds
 
     // Layout
     int  m_splitterY     = 0;

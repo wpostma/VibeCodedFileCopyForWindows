@@ -6,7 +6,7 @@
 
 // ── LogPanel ──────────────────────────────────────────────────────────────────
 // Custom-painted child window with a collapsible tree-list log view.
-// The header bar has "Log options ▼" and a close [×] button.
+// The header bar has "Log" and a close [×] button.
 // Rows show: timestamp | indent | [+/-] | message text.
 
 class LogPanel {

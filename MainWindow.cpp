@@ -437,11 +437,35 @@ void MainWindow::UpdateJobSelection()
 {
     m_selJob = m_jobList.SelectedIndex();
     Log(L"UpdateJobSelection: m_selJob=%d  jobs.size=%d", m_selJob, (int)m_jobs.size());
-    if (m_selJob >= 0 && m_selJob < (int)m_jobs.size())
-        m_logPanel.LoadJob(m_jobs[m_selJob]->logEntries);
-    else
-        m_logPanel.Clear();
+    RefreshLogPanel();
     UpdateToolbarState();
+}
+
+void MainWindow::RefreshLogPanel()
+{
+    // Build a combined log with each job as a collapsible root entry.
+    std::vector<LogEntry> combined;
+    for (auto& job : m_jobs) {
+        if (job->logEntries.empty()) continue;
+
+        // Root node: job name
+        LogEntry root;
+        root.text      = job->name;
+        root.depth     = 0;
+        root.isGroup   = true;
+        root.expanded  = true;
+        root.parentIdx = -1;
+        combined.push_back(root);
+
+        // Job's entries shifted one depth level deeper
+        for (auto& e : job->logEntries) {
+            LogEntry copy = e;
+            copy.depth += 1;
+            combined.push_back(copy);
+        }
+    }
+    m_logPanel.LoadJob(combined);
+    m_lastLogRefresh = GetTickCount64();
 }
 
 // ── Job operations ────────────────────────────────────────────────────────────
@@ -494,7 +518,7 @@ void MainWindow::CmdDeleteJob()
     m_jobs.erase(m_jobs.begin() + idx);
     m_selJob = -1;
     m_jobList.SetSelectedIndex(-1);
-    m_logPanel.Clear();
+    RefreshLogPanel();
 
     SaveJobs();
     m_jobList.Refresh();
@@ -528,6 +552,7 @@ void MainWindow::CmdRunJob(int idx)
     job.cancelFlag->store(false);
     job.pauseFlag->store(false);
     job.status        = JobStatus::Scanning;
+    job.runStartTick  = GetTickCount64();
     job.stats         = {};
     job.logEntries.clear();
     job.curFileLogIdx = -1;
@@ -542,8 +567,7 @@ void MainWindow::CmdRunJob(int idx)
     le.parentIdx = -1;
     job.logEntries.push_back(le);
 
-    if (m_selJob == idx)
-        m_logPanel.LoadJob(job.logEntries);
+    RefreshLogPanel();
 
     // Launch engine
     EngineParams ep;
@@ -635,8 +659,6 @@ void MainWindow::OnJobLog(int jobIdx, LogMsg* msg)
             le.timestamp  = msg->timestamp;
             le.text       = msg->text;
             le.text2      = msg->text2;
-            if (m_selJob == jobIdx)
-                m_logPanel.UpdateEntry(job.curFileLogIdx, le);
         } else {
             // Append a new entry
             LogEntry le;
@@ -650,11 +672,14 @@ void MainWindow::OnJobLog(int jobIdx, LogMsg* msg)
             int newIdx = (int)job.logEntries.size();
             job.logEntries.push_back(le);
 
-            if (m_selJob == jobIdx)
-                m_logPanel.AppendEntry(le);
-
             if (msg->replaceCurrentFile)
-                job.curFileLogIdx = newIdx;   // record first live-file slot
+                job.curFileLogIdx = newIdx;
+        }
+
+        // Throttled combined-log refresh (at most every 50ms)
+        ULONGLONG now = GetTickCount64();
+        if (now - m_lastLogRefresh >= 50) {
+            RefreshLogPanel();
         }
     }
     delete msg;
@@ -682,6 +707,7 @@ void MainWindow::OnJobDone(int jobIdx, ULONGLONG errors)
     job.lastRunTime = buf;
 
     m_jobList.Refresh();
+    RefreshLogPanel();   // final log update (un-throttled)
     UpdateToolbarState();
     SaveJobs();   // persist updated stats + last-run time
 }
@@ -873,6 +899,21 @@ LRESULT CALLBACK MainWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_JOB_DONE:
         pThis->OnJobDone((int)wp, (ULONGLONG)lp);
         return 0;
+
+    case WM_JOB_SPACE_CHECK: {
+        auto* info = reinterpret_cast<SpaceCheckInfo*>(lp);
+        double freeGB   = info->freeBytes   / (1024.0 * 1024.0 * 1024.0);
+        double neededGB = info->neededBytes / (1024.0 * 1024.0 * 1024.0);
+        wchar_t buf[256];
+        swprintf_s(buf,
+            L"Destination has %.1f GB free.\n"
+            L"A full copy could need up to %.1f GB.\n"
+            L"(Files already copied will be skipped.)\n\n"
+            L"Continue anyway?",
+            freeGB, neededGB);
+        return MessageBoxW(pThis->m_hwnd, buf, L"Low Disk Space",
+                           MB_YESNO | MB_ICONWARNING);
+    }
 
     case WM_DESTROY:
         pThis->OnDestroy();

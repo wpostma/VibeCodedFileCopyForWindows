@@ -93,9 +93,32 @@ void LogPanel::Clear()
 
 void LogPanel::LoadJob(const std::vector<LogEntry>& entries)
 {
+    bool wasAtBottom = false;
+    if (m_hwnd && !m_all.empty()) {
+        RECT rc; GetClientRect(m_hwnd, &rc);
+        int contentH = (int)m_vis.size() * k_rowH;
+        int viewH    = rc.bottom - k_headerH;
+        wasAtBottom = (viewH <= 0 || contentH <= viewH ||
+                       m_scrollY >= contentH - viewH - k_rowH);
+    }
+
+    int prevScroll = m_scrollY;
     m_all = entries;
-    m_scrollY = 0;
     RebuildVisible();
+
+    if (wasAtBottom) {
+        // Auto-scroll to bottom (following new entries)
+        RECT rc; GetClientRect(m_hwnd, &rc);
+        int contentH = (int)m_vis.size() * k_rowH;
+        int viewH    = rc.bottom - k_headerH;
+        if (viewH > 0 && contentH > viewH)
+            m_scrollY = contentH - viewH;
+        else
+            m_scrollY = 0;
+    } else {
+        // Preserve scroll position
+        m_scrollY = prevScroll;
+    }
     Refresh();
 }
 
@@ -194,7 +217,7 @@ void LogPanel::PaintHeader(HDC dc, int W)
     SelectObject(dc, m_fontHdr);
     SetTextColor(dc, LC::HdrText);
     RECT tRc = { 10, 0, W - 36, k_headerH };
-    DrawTextW(dc, L"Log options \x25BC", -1, &tRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    DrawTextW(dc, L"Log", -1, &tRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
 void LogPanel::PaintRow(HDC dc, const RECT& rc, int visIdx)

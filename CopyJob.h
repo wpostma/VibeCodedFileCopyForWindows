@@ -30,8 +30,8 @@ struct JobStats {
     ULONGLONG totalFolders  = 0;
     ULONGLONG errorCount    = 0;
     ULONGLONG changeCount   = 0;
+    ULONGLONG bytesToCopy   = 0;      // total bytes of files that need copying
     double    elapsedSec    = 0.0;
-    ULONGLONG unused = 1;
 };
 
 // ── A copy job: config + runtime state ───────────────────────────────────────
@@ -43,6 +43,7 @@ struct CopyJob {
 
     // Runtime state (main-thread only except cancelFlag)
     JobStatus     status       = JobStatus::Idle;
+    ULONGLONG     runStartTick = 0;   // GetTickCount64() when run began
     JobStats      stats        = {};
     std::wstring  lastRunTime;    // e.g. L"9 hours ago"
     std::wstring  nextRunTime;    // e.g. L"in 14 hours"
@@ -76,4 +77,11 @@ struct LogMsg {
     bool         isGroup    = false;
     int          parentIdx  = -1;
     bool         replaceCurrentFile = false;  // overwrite the live file slot
+};
+
+// Passed via LPARAM of WM_JOB_SPACE_CHECK (lives on scanner-thread stack;
+// SendMessageW blocks so it stays valid until the UI thread returns).
+struct SpaceCheckInfo {
+    ULONGLONG freeBytes;
+    ULONGLONG neededBytes;
 };

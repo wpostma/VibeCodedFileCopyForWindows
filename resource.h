@@ -46,4 +46,5 @@
 #define WM_JOB_PROGRESS         (WM_APP + 1)   // lParam = new ProgressMsg* (heap; receiver frees)
 #define WM_JOB_LOG              (WM_APP + 2)   // lParam = new LogMsg*      (heap; receiver frees)
 #define WM_JOB_DONE             (WM_APP + 3)   // wParam = jobIndex, lParam = errorCount
+#define WM_JOB_SPACE_CHECK      (WM_APP + 4)   // lParam = SpaceCheckInfo* (stack; SendMessage blocks)
 #endif

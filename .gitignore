@@ -1,3 +1,8 @@
-﻿bin/Release_x64/log
+bin/Release_x64/log
 bin
 obj
+installers
+17.14.1584.41681
+/.vs/FileCopyUtility/v17
+/.vs/FileCopyUtility/FileContentIndex
+/*.zip
