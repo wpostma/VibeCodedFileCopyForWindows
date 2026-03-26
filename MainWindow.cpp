@@ -59,7 +59,7 @@ bool MainWindow::Create(HINSTANCE hInst)
     if (!JobListPanel::RegisterClass(hInst)) return false;
     if (!LogPanel::RegisterClass(hInst))     return false;
 
-    m_hwnd = CreateWindowExW(0, k_WndClass, L"File Copy Utility",
+    m_hwnd = CreateWindowExW(0, k_WndClass, L"File Copy Utility v2.0",
                  WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                  CW_USEDEFAULT, CW_USEDEFAULT, 760, 640,
                  nullptr, nullptr, hInst, this);
@@ -159,6 +159,15 @@ static std::wstring IniRead(const wchar_t* sec, const wchar_t* key,
     return buf;
 }
 
+// Larger buffer for filter patterns that may exceed MAX_PATH*2
+static std::wstring IniReadLong(const wchar_t* sec, const wchar_t* key,
+                                 const wchar_t* ini)
+{
+    wchar_t buf[4096] = {};
+    GetPrivateProfileStringW(sec, key, L"", buf, (DWORD)std::size(buf), ini);
+    return buf;
+}
+
 static ULONGLONG IniReadULL(const wchar_t* sec, const wchar_t* key,
                              const wchar_t* ini)
 {
@@ -194,7 +203,25 @@ void MainWindow::SaveJobs()
         IniWriteULL(sec, L"CopiedBytes",  job.stats.copiedBytes,  ini);
         IniWriteULL(sec, L"TotalBytes",   job.stats.totalBytes,   ini);
         IniWriteULL(sec, L"ErrorCount",   job.stats.errorCount,   ini);
+
+        // Schedule
+        IniWrite(sec, L"ScheduleType",
+                 job.scheduleType == ScheduleType::Interval ? L"Interval" :
+                 job.scheduleType == ScheduleType::Daily    ? L"Daily"    : L"Manual", ini);
+        IniWriteULL(sec, L"ScheduleValue", (ULONGLONG)job.scheduleValue, ini);
+
+        // Filters
+        IniWrite(sec, L"ExcludePatterns", job.excludePatterns, ini);
+        IniWrite(sec, L"IncludePatterns", job.includePatterns, ini);
+
+        // Smart defer
+        IniWriteULL(sec, L"SmartDefer",    job.smartDefer ? 1 : 0, ini);
+        IniWriteULL(sec, L"QuietPeriodMin", (ULONGLONG)job.quietPeriodMin, ini);
     }
+
+    // Global settings
+    IniWriteULL(L"Settings", L"CloseToTray",    m_closeToTray ? 1 : 0, ini);
+    IniWriteULL(L"Settings", L"StartWithWindows", m_startWithWindows ? 1 : 0, ini);
 
     Log(L"SaveJobs: wrote %d jobs to %s", (int)m_jobs.size(), ini);
 }
@@ -224,11 +251,32 @@ void MainWindow::LoadJobs()
         job->stats.totalBytes   = IniReadULL(sec, L"TotalBytes",   ini);
         job->stats.errorCount   = IniReadULL(sec, L"ErrorCount",   ini);
 
+        // Schedule
+        std::wstring schedStr = IniRead(sec, L"ScheduleType", ini);
+        if (schedStr == L"Interval")   job->scheduleType = ScheduleType::Interval;
+        else if (schedStr == L"Daily") job->scheduleType = ScheduleType::Daily;
+        else                           job->scheduleType = ScheduleType::Manual;
+        int sv = (int)IniReadULL(sec, L"ScheduleValue", ini);
+        if (sv > 0) job->scheduleValue = sv;
+
+        // Filters
+        job->excludePatterns = IniReadLong(sec, L"ExcludePatterns", ini);
+        job->includePatterns = IniReadLong(sec, L"IncludePatterns", ini);
+
+        // Smart defer
+        job->smartDefer     = IniReadULL(sec, L"SmartDefer", ini) != 0;
+        int qp = (int)IniReadULL(sec, L"QuietPeriodMin", ini);
+        if (qp > 0) job->quietPeriodMin = qp;
+
         if (!job->name.empty()) {
             Log(L"LoadJobs: loaded job '%s'", job->name.c_str());
             m_jobs.push_back(std::move(job));
         }
     }
+
+    // Global settings
+    m_closeToTray      = IniReadULL(L"Settings", L"CloseToTray", ini) != 0;
+    m_startWithWindows = IniReadULL(L"Settings", L"StartWithWindows", ini) != 0;
 }
 
 // ── Status strip painting ─────────────────────────────────────────────────────
@@ -413,6 +461,20 @@ void MainWindow::OnCreate()
     UpdateToolbarState();
 
     RepositionChildren();
+
+    // Create tray icon and start schedule timer
+    CreateTrayIcon();
+    StartScheduleTimer();
+
+    // Start folder watchers for jobs with smart defer
+    for (int i = 0; i < (int)m_jobs.size(); i++) {
+        auto& job = *m_jobs[i];
+        auto watcher = std::make_unique<FolderWatcher>();
+        if (job.smartDefer && job.scheduleType != ScheduleType::Manual) {
+            watcher->Start(job.sourcePath, m_hwnd, i);
+        }
+        m_watchers.push_back(std::move(watcher));
+    }
 }
 
 // ── Size ─────────────────────────────────────────────────────────────────────
@@ -472,12 +534,19 @@ void MainWindow::RefreshLogPanel()
 void MainWindow::CmdNewJob()
 {
     AddJobDlgData data;
+    data.excludePatterns = L"*.tmp;~$*;Thumbs.db;desktop.ini;.DS_Store;.git;node_modules";
     if (!ShowAddJobDialog(m_hwnd, m_hInst, data)) return;
 
     auto job = std::make_unique<CopyJob>();
-    job->name       = data.name;
-    job->sourcePath = data.sourcePath;
-    job->destPath   = data.destPath;
+    job->name            = data.name;
+    job->sourcePath      = data.sourcePath;
+    job->destPath        = data.destPath;
+    job->scheduleType    = (ScheduleType)data.scheduleType;
+    job->scheduleValue   = data.scheduleValue;
+    job->excludePatterns = data.excludePatterns;
+    job->includePatterns = data.includePatterns;
+    job->smartDefer      = data.smartDefer;
+    job->quietPeriodMin  = data.quietPeriodMin;
     m_jobs.push_back(std::move(job));
 
     SaveJobs();
@@ -492,12 +561,27 @@ void MainWindow::CmdEditJob()
     if (idx < 0 || idx >= (int)m_jobs.size()) return;
 
     auto& job = *m_jobs[idx];
-    AddJobDlgData data{ job.name, job.sourcePath, job.destPath };
+    AddJobDlgData data;
+    data.name            = job.name;
+    data.sourcePath      = job.sourcePath;
+    data.destPath        = job.destPath;
+    data.scheduleType    = (int)job.scheduleType;
+    data.scheduleValue   = job.scheduleValue;
+    data.excludePatterns = job.excludePatterns;
+    data.includePatterns = job.includePatterns;
+    data.smartDefer      = job.smartDefer;
+    data.quietPeriodMin  = job.quietPeriodMin;
     if (!ShowAddJobDialog(m_hwnd, m_hInst, data)) return;
 
-    job.name       = data.name;
-    job.sourcePath = data.sourcePath;
-    job.destPath   = data.destPath;
+    job.name            = data.name;
+    job.sourcePath      = data.sourcePath;
+    job.destPath        = data.destPath;
+    job.scheduleType    = (ScheduleType)data.scheduleType;
+    job.scheduleValue   = data.scheduleValue;
+    job.excludePatterns = data.excludePatterns;
+    job.includePatterns = data.includePatterns;
+    job.smartDefer      = data.smartDefer;
+    job.quietPeriodMin  = data.quietPeriodMin;
 
     SaveJobs();
     m_jobList.Refresh();
@@ -577,6 +661,8 @@ void MainWindow::CmdRunJob(int idx)
     ep.destPath   = job.destPath;
     ep.cancelFlag = job.cancelFlag;
     ep.pauseFlag  = job.pauseFlag;
+    ep.excludePatterns = SplitPatterns(job.excludePatterns);
+    ep.includePatterns = SplitPatterns(job.includePatterns);
 
     job.threadHandle = StartCopyEngine(ep);
     Log(L"CmdRunJob: StartCopyEngine returned handle=%p", (void*)job.threadHandle);
@@ -709,7 +795,21 @@ void MainWindow::OnJobDone(int jobIdx, ULONGLONG errors)
     m_jobList.Refresh();
     RefreshLogPanel();   // final log update (un-throttled)
     UpdateToolbarState();
+    UpdateTrayIcon();
     SaveJobs();   // persist updated stats + last-run time
+
+    // Tray balloon notification if minimized
+    if (m_minimizedToTray && m_trayIconActive) {
+        m_nid.uFlags = NIF_INFO;
+        m_nid.dwInfoFlags = (errors > 0) ? NIIF_WARNING : NIIF_INFO;
+        swprintf_s(m_nid.szInfoTitle, L"Job: %s", job.name.c_str());
+        if (errors > 0)
+            swprintf_s(m_nid.szInfo, L"Completed with %llu errors", errors);
+        else
+            wcscpy_s(m_nid.szInfo, L"Completed successfully");
+        Shell_NotifyIconW(NIM_MODIFY, &m_nid);
+        m_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;  // restore flags
+    }
 }
 
 // ── Splitter drag ─────────────────────────────────────────────────────────────
@@ -783,6 +883,271 @@ static void PaintSplitter(HWND hwnd, int splitterY, int splitH)
     EndPaint(hwnd, &ps);
 }
 
+// ── Tray icon ─────────────────────────────────────────────────────────────────
+
+void MainWindow::CreateTrayIcon()
+{
+    m_nid.cbSize           = sizeof(m_nid);
+    m_nid.hWnd             = m_hwnd;
+    m_nid.uID              = 1;
+    m_nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    m_nid.uCallbackMessage = WM_TRAYICON;
+    m_nid.hIcon            = LoadIconW(m_hInst, MAKEINTRESOURCEW(IDI_APP));
+    wcscpy_s(m_nid.szTip, L"File Copy Utility");
+    Shell_NotifyIconW(NIM_ADD, &m_nid);
+    m_trayIconActive = true;
+}
+
+void MainWindow::UpdateTrayIcon()
+{
+    if (!m_trayIconActive) return;
+    const wchar_t* tip = L"File Copy Utility - Idle";
+    if (AnyJobActive()) tip = L"File Copy Utility - Running...";
+    wcscpy_s(m_nid.szTip, tip);
+    Shell_NotifyIconW(NIM_MODIFY, &m_nid);
+}
+
+void MainWindow::RemoveTrayIcon()
+{
+    if (!m_trayIconActive) return;
+    Shell_NotifyIconW(NIM_DELETE, &m_nid);
+    m_trayIconActive = false;
+}
+
+void MainWindow::ShowTrayMenu()
+{
+    HMENU hMenu = CreatePopupMenu();
+    AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN,     L"&Open");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hMenu, MF_STRING, ID_TRAY_RUNALL,   L"&Run All Jobs");
+    AppendMenuW(hMenu, MF_STRING, ID_TRAY_PAUSEALL, L"&Pause All");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT,     L"E&xit");
+
+    POINT pt; GetCursorPos(&pt);
+    SetForegroundWindow(m_hwnd);
+    TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, m_hwnd, nullptr);
+    DestroyMenu(hMenu);
+}
+
+void MainWindow::MinimizeToTray()
+{
+    ShowWindow(m_hwnd, SW_HIDE);
+    m_minimizedToTray = true;
+    if (!m_trayIconActive) CreateTrayIcon();
+    UpdateTrayIcon();
+}
+
+void MainWindow::RestoreFromTray()
+{
+    ShowWindow(m_hwnd, SW_SHOW);
+    SetForegroundWindow(m_hwnd);
+    m_minimizedToTray = false;
+}
+
+void MainWindow::OnTrayIcon(LPARAM lp)
+{
+    UINT msg = LOWORD(lp);
+    if (msg == WM_LBUTTONDBLCLK) {
+        RestoreFromTray();
+    } else if (msg == WM_RBUTTONUP) {
+        ShowTrayMenu();
+    }
+}
+
+bool MainWindow::OnClose()
+{
+    if (m_closeToTray) {
+        MinimizeToTray();
+        return true;  // handled — don't destroy
+    }
+    if (AnyJobActive()) {
+        int result = MessageBoxW(m_hwnd,
+            L"Jobs are still running. Quit and stop all jobs?",
+            L"Confirm Exit", MB_YESNO | MB_ICONQUESTION);
+        if (result != IDYES) return true;
+    }
+    return false;  // proceed with destroy
+}
+
+void MainWindow::CmdRunAll()
+{
+    for (int i = 0; i < (int)m_jobs.size(); i++) {
+        auto& job = *m_jobs[i];
+        if (job.status == JobStatus::Idle || job.status == JobStatus::Done ||
+            job.status == JobStatus::Error || job.status == JobStatus::Stopped)
+            CmdRunJob(i);
+    }
+}
+
+void MainWindow::CmdPauseAll()
+{
+    for (int i = 0; i < (int)m_jobs.size(); i++)
+        CmdPauseJob(i);
+}
+
+// ── Scheduling ────────────────────────────────────────────────────────────────
+
+void MainWindow::StartScheduleTimer()
+{
+    // Poll every 60 seconds to check schedules
+    SetTimer(m_hwnd, IDT_SCHEDULE_POLL, 60000, nullptr);
+    m_lastScheduleCheck = GetTickCount64();
+}
+
+void MainWindow::CheckSchedules()
+{
+    ULONGLONG now = GetTickCount64();
+
+    // Ensure m_lastScheduledRun is sized properly
+    while (m_lastScheduledRun.size() < m_jobs.size())
+        m_lastScheduledRun.push_back(0);
+
+    for (int i = 0; i < (int)m_jobs.size(); i++) {
+        auto& job = *m_jobs[i];
+        if (job.scheduleType == ScheduleType::Manual) continue;
+        if (job.status != JobStatus::Idle && job.status != JobStatus::Done &&
+            job.status != JobStatus::Error && job.status != JobStatus::Stopped)
+            continue;  // already running
+
+        bool shouldRun = false;
+
+        if (job.scheduleType == ScheduleType::Interval) {
+            ULONGLONG intervalMs = (ULONGLONG)job.scheduleValue * 60 * 1000;
+            if (now - m_lastScheduledRun[i] >= intervalMs)
+                shouldRun = true;
+        } else if (job.scheduleType == ScheduleType::Daily) {
+            SYSTEMTIME st; GetLocalTime(&st);
+            int nowHHMM = st.wHour * 100 + st.wMinute;
+            int targetHHMM = job.scheduleValue;
+            // Check if we're within the target minute and haven't run in the last 2 minutes
+            if (nowHHMM == targetHHMM && (now - m_lastScheduledRun[i]) > 120000)
+                shouldRun = true;
+        }
+
+        if (shouldRun) {
+            // Smart defer: check if source is actively changing (via FolderWatcher)
+            if (job.smartDefer && i < (int)m_watchers.size() && m_watchers[i]) {
+                ULONGLONG lastAct = m_watchers[i]->LastActivityTick();
+                if (lastAct > 0) {
+                    ULONGLONG quietMs = (ULONGLONG)job.quietPeriodMin * 60 * 1000;
+                    if (now - lastAct < quietMs) {
+                        ULONGLONG remaining = quietMs - (now - lastAct);
+                        int remMin = (int)(remaining / 60000);
+                        wchar_t buf[64];
+                        swprintf_s(buf, L"Deferred (quiet in %dm %ds)",
+                                   remMin, (int)((remaining % 60000) / 1000));
+                        job.nextRunTime = buf;
+                        m_jobList.Refresh();
+                        continue;
+                    }
+                }
+            }
+
+            m_lastScheduledRun[i] = now;
+            Log(L"Schedule: auto-running job '%s'", job.name.c_str());
+            CmdRunJob(i);
+        }
+
+        // Update next-run display
+        if (job.scheduleType == ScheduleType::Interval && !shouldRun) {
+            ULONGLONG intervalMs = (ULONGLONG)job.scheduleValue * 60 * 1000;
+            ULONGLONG remaining = intervalMs - (now - m_lastScheduledRun[i]);
+            int remMin = (int)(remaining / 60000);
+            wchar_t buf[64];
+            swprintf_s(buf, L"in %d min", remMin > 0 ? remMin : 1);
+            job.nextRunTime = buf;
+        } else if (job.scheduleType == ScheduleType::Daily) {
+            wchar_t buf[32];
+            int h = job.scheduleValue / 100;
+            int m = job.scheduleValue % 100;
+            int h12 = h % 12; if (h12 == 0) h12 = 12;
+            swprintf_s(buf, L"daily at %d:%02d %s", h12, m, h < 12 ? L"AM" : L"PM");
+            job.nextRunTime = buf;
+        }
+    }
+    m_jobList.Refresh();
+}
+
+void MainWindow::OnTimer(UINT_PTR timerId)
+{
+    if (timerId == IDT_SCHEDULE_POLL) {
+        CheckSchedules();
+    }
+}
+
+void MainWindow::OnPowerBroadcast(WPARAM event)
+{
+    if (event == PBT_APMRESUMEAUTOMATIC || event == PBT_APMRESUMESUSPEND) {
+        Log(L"System resumed from sleep — re-checking schedules");
+        CheckSchedules();
+    }
+}
+
+void MainWindow::UpdateStartWithWindows()
+{
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+        0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        if (m_startWithWindows) {
+            wchar_t exePath[MAX_PATH];
+            GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+            std::wstring val = std::wstring(L"\"") + exePath + L"\" --minimized";
+            RegSetValueExW(hKey, L"FileCopyUtility", 0, REG_SZ,
+                           (const BYTE*)val.c_str(),
+                           (DWORD)((val.size() + 1) * sizeof(wchar_t)));
+        } else {
+            RegDeleteValueW(hKey, L"FileCopyUtility");
+        }
+        RegCloseKey(hKey);
+    }
+}
+
+// ── Settings dialog ──────────────────────────────────────────────────────────
+
+struct SettingsDlgCtx {
+    bool closeToTray;
+    bool startWithWindows;
+};
+
+static INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    auto* ctx = reinterpret_cast<SettingsDlgCtx*>(GetWindowLongPtrW(hDlg, DWLP_USER));
+    switch (msg) {
+    case WM_INITDIALOG:
+        ctx = reinterpret_cast<SettingsDlgCtx*>(lp);
+        SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)ctx);
+        CheckDlgButton(hDlg, IDC_CHK_CLOSE_TO_TRAY,  ctx->closeToTray ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(hDlg, IDC_CHK_START_WITH_WIN, ctx->startWithWindows ? BST_CHECKED : BST_UNCHECKED);
+        return TRUE;
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDOK) {
+            ctx->closeToTray     = IsDlgButtonChecked(hDlg, IDC_CHK_CLOSE_TO_TRAY)  == BST_CHECKED;
+            ctx->startWithWindows = IsDlgButtonChecked(hDlg, IDC_CHK_START_WITH_WIN) == BST_CHECKED;
+            EndDialog(hDlg, IDOK);
+        } else if (LOWORD(wp) == IDCANCEL) {
+            EndDialog(hDlg, IDCANCEL);
+        }
+        return TRUE;
+    }
+    return FALSE;
+}
+
+void MainWindow::ShowSettingsDialog()
+{
+    SettingsDlgCtx ctx{ m_closeToTray, m_startWithWindows };
+    INT_PTR result = DialogBoxParamW(m_hInst, MAKEINTRESOURCE(IDD_SETTINGS),
+                                      m_hwnd, SettingsDlgProc, (LPARAM)&ctx);
+    if (result == IDOK) {
+        m_closeToTray      = ctx.closeToTray;
+        m_startWithWindows = ctx.startWithWindows;
+        UpdateStartWithWindows();
+        SaveJobs();
+    }
+}
+
 // ── Commands ─────────────────────────────────────────────────────────────────
 void MainWindow::OnCommand(int id, HWND)
 {
@@ -796,15 +1161,20 @@ void MainWindow::OnCommand(int id, HWND)
     case ID_FILE_STOPJOB:
     case ID_BTN_STOPSQ:     CmdStopJob();   break;
     case ID_FILE_EXIT:      DestroyWindow(m_hwnd); break;
+    case ID_TRAY_OPEN:      RestoreFromTray(); break;
+    case ID_TRAY_RUNALL:    CmdRunAll();    break;
+    case ID_TRAY_PAUSEALL:  CmdPauseAll();  break;
+    case ID_TRAY_EXIT:      m_closeToTray = false; DestroyWindow(m_hwnd); break;
     case ID_HELP_ABOUT:
         MessageBoxW(m_hwnd,
-            L"File Copy Utility\nVersion 1.0\n\n"
+            L"File Copy Utility v2.0\n\n"
             L"A lightweight backup and file copy tool.\n"
-            L"Built with pure Win32 API.",
-            L"About", MB_OK | MB_ICONINFORMATION);
+            L"Built with pure Win32 API + Claude.\n\n"
+            L"https://github.com/",
+            L"About File Copy Utility", MB_OK | MB_ICONINFORMATION);
         break;
     case ID_OPTIONS_SETTINGS:
-        MessageBoxW(m_hwnd, L"Settings not yet implemented.", L"Settings", MB_OK);
+        ShowSettingsDialog();
         break;
     }
 }
@@ -818,6 +1188,12 @@ void MainWindow::OnNotify(NMHDR* nm)
 // ── Destroy ──────────────────────────────────────────────────────────────────
 void MainWindow::OnDestroy()
 {
+    KillTimer(m_hwnd, IDT_SCHEDULE_POLL);
+    RemoveTrayIcon();
+
+    // Stop all folder watchers
+    m_watchers.clear();
+
     // Stop all running jobs
     for (int i = 0; i < (int)m_jobs.size(); i++) {
         m_jobs[i]->cancelFlag->store(true);
@@ -914,6 +1290,23 @@ LRESULT CALLBACK MainWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return MessageBoxW(pThis->m_hwnd, buf, L"Low Disk Space",
                            MB_YESNO | MB_ICONWARNING);
     }
+
+    case WM_TIMER:
+        pThis->OnTimer((UINT_PTR)wp);
+        return 0;
+
+    case WM_TRAYICON:
+        pThis->OnTrayIcon(lp);
+        return 0;
+
+    case WM_POWERBROADCAST:
+        pThis->OnPowerBroadcast(wp);
+        break;
+
+    case WM_CLOSE:
+        if (pThis->OnClose())
+            return 0;  // minimized to tray, don't destroy
+        break;
 
     case WM_DESTROY:
         pThis->OnDestroy();

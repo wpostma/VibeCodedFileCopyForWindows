@@ -29,30 +29,65 @@ BEGIN
 END
 
 // ── Add Job dialog ────────────────────────────────────────────────────────────
-IDD_ADD_JOB DIALOGEX 0, 0, 252, 105
+IDD_ADD_JOB DIALOGEX 0, 0, 280, 240
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Add Copy Job"
 FONT 9, "Segoe UI", 400, 0, 0x1
 BEGIN
     LTEXT       "Job name:",        -1,                  6,  10,  52, 10
-    EDITTEXT                        IDC_EDIT_JOBNAME,   62,   8, 182, 13, ES_AUTOHSCROLL
+    EDITTEXT                        IDC_EDIT_JOBNAME,   62,   8, 210, 13, ES_AUTOHSCROLL
 
     LTEXT       "Source folder:",   -1,                  6,  28,  52, 10
-    EDITTEXT                        IDC_EDIT_SOURCE,    62,  26, 152, 13, ES_AUTOHSCROLL
-    PUSHBUTTON  "...",              IDC_BTN_BROWSE_SRC, 218,  25,  26, 14
+    EDITTEXT                        IDC_EDIT_SOURCE,    62,  26, 180, 13, ES_AUTOHSCROLL
+    PUSHBUTTON  "...",              IDC_BTN_BROWSE_SRC, 246,  25,  26, 14
 
     LTEXT       "Destination:",     -1,                  6,  46,  52, 10
-    EDITTEXT                        IDC_EDIT_DEST,      62,  44, 152, 13, ES_AUTOHSCROLL
-    PUSHBUTTON  "...",              IDC_BTN_BROWSE_DST, 218,  43,  26, 14
+    EDITTEXT                        IDC_EDIT_DEST,      62,  44, 180, 13, ES_AUTOHSCROLL
+    PUSHBUTTON  "...",              IDC_BTN_BROWSE_DST, 246,  43,  26, 14
 
-    DEFPUSHBUTTON "OK",             IDOK,               140,  83,  50, 14
-    PUSHBUTTON  "Cancel",           IDCANCEL,           194,  83,  50, 14
+    GROUPBOX    "Schedule",         -1,                  6,  66, 268, 44
+    AUTORADIOBUTTON "Manual",       IDC_RADIO_MANUAL,   14,  78,  48, 10, WS_GROUP
+    AUTORADIOBUTTON "Every",        IDC_RADIO_INTERVAL, 68,  78,  30, 10
+    EDITTEXT                        IDC_EDIT_INTERVAL, 100,  76,  28, 13, ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT       "min",              -1,                132,  78,  16, 10
+    AUTORADIOBUTTON "Daily at",     IDC_RADIO_DAILY,  160,  78,  42, 10
+    EDITTEXT                        IDC_EDIT_DAILY_TIME,206, 76,  36, 13, ES_AUTOHSCROLL
+    LTEXT       "(HH:MM)",          -1,                246,  78,  28, 10
+
+    AUTOCHECKBOX "Defer while source is active",  IDC_CHK_SMART_DEFER,  14, 94, 140, 10
+    LTEXT       "Quiet period:",    -1,                160,  96,  52, 10
+    EDITTEXT                        IDC_EDIT_QUIET_PERIOD, 214, 94,  20, 13, ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT       "min",              -1,                238,  96,  16, 10
+
+    GROUPBOX    "Filters (wildcards: *.tmp  folder names: .git  one per line or ; separated)",  -1,  6, 116, 268, 80
+    LTEXT       "Exclude:",         -1,                 14, 130,  40, 10
+    EDITTEXT                        IDC_EDIT_EXCLUDE,   56, 128, 184, 26, ES_AUTOHSCROLL | ES_MULTILINE | ES_WANTRETURN | WS_VSCROLL
+    PUSHBUTTON  "...",              IDC_BTN_BROWSE_EXCL,244, 128,  22, 14
+    LTEXT       "Include:",         -1,                 14, 162,  40, 10
+    EDITTEXT                        IDC_EDIT_INCLUDE,   56, 160, 184, 26, ES_AUTOHSCROLL | ES_MULTILINE | ES_WANTRETURN | WS_VSCROLL
+    PUSHBUTTON  "...",              IDC_BTN_BROWSE_INCL,244, 160,  22, 14
+
+    DEFPUSHBUTTON "OK",             IDOK,               168, 218,  50, 14
+    PUSHBUTTON  "Cancel",           IDCANCEL,           222, 218,  50, 14
+END
+
+// ── Settings dialog ──────────────────────────────────────────────────────────
+IDD_SETTINGS DIALOGEX 0, 0, 200, 80
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Settings"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    AUTOCHECKBOX "Minimize to tray on close",  IDC_CHK_CLOSE_TO_TRAY,  14, 14, 170, 10
+    AUTOCHECKBOX "Start with Windows",         IDC_CHK_START_WITH_WIN, 14, 32, 170, 10
+
+    DEFPUSHBUTTON "OK",     IDOK,      90, 58, 50, 14
+    PUSHBUTTON  "Cancel",   IDCANCEL, 144, 58, 50, 14
 END
 
 // ── Version information ───────────────────────────────────────────────────────
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,0,0,0
-PRODUCTVERSION  1,0,0,0
+FILEVERSION     2,0,0,0
+PRODUCTVERSION  2,0,0,0
 FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
 FILEFLAGS       0
 FILEOS          VOS_NT_WINDOWS32
@@ -65,12 +100,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "Warren"
             VALUE "FileDescription",  "File Copy Utility"
-            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "FileVersion",      "2.0.0.0"
             VALUE "InternalName",     "FileCopyUtility"
             VALUE "LegalCopyright",   "Copyright \251 2026"
             VALUE "OriginalFilename", "FileCopyUtility.exe"
             VALUE "ProductName",      "File Copy Utility"
-            VALUE "ProductVersion",   "1.0.0.0"
+            VALUE "ProductVersion",   "2.0.0.0"
         END
     END
     BLOCK "VarFileInfo"

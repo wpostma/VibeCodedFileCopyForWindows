@@ -193,6 +193,7 @@
     <ClCompile Include="LogPanel.cpp" />
     <ClCompile Include="CopyEngine.cpp" />
     <ClCompile Include="AddJobDlg.cpp" />
+    <ClCompile Include="FolderWatcher.cpp" />
     <ClCompile Include="logger.c" />
   </ItemGroup>
 
@@ -206,6 +207,7 @@
     <ClInclude Include="LogPanel.h" />
     <ClInclude Include="AddJobDlg.h" />
     <ClInclude Include="utils.h" />
+    <ClInclude Include="FolderWatcher.h" />
   </ItemGroup>
 
   <ItemGroup>

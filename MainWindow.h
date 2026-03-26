@@ -1,11 +1,12 @@
 #pragma once
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shellapi.h>
 #include <vector>
 #include <memory>
 #include "CopyJob.h"
 #include "JobListPanel.h"
 #include "LogPanel.h"
+#include "FolderWatcher.h"
 
 // ── MainWindow ────────────────────────────────────────────────────────────────
 // Top-level frame: toolbar | job list | splitter | log panel | status strip.
@@ -36,6 +37,10 @@ private:
     void OnJobProgress(int jobIdx, ProgressMsg* msg);
     void OnJobLog(int jobIdx, LogMsg* msg);
     void OnJobDone(int jobIdx, ULONGLONG errors);
+    void OnTimer(UINT_PTR timerId);
+    void OnTrayIcon(LPARAM lp);
+    void OnPowerBroadcast(WPARAM event);
+    bool OnClose();   // returns true if handled (minimized to tray)
     void OnDestroy();
 
     // Job operations
@@ -45,6 +50,8 @@ private:
     void CmdRunJob(int idx = -1);   // -1 = selected; also resumes a paused job
     void CmdPauseJob(int idx = -1);
     void CmdStopJob(int idx = -1);
+    void CmdRunAll();
+    void CmdPauseAll();
 
     void UpdateToolbarState();      // enable/disable/gray toolbar buttons
     bool AnyJobActive() const;      // any job Scanning/Copying/Paused
@@ -52,6 +59,22 @@ private:
     // Persistence
     void SaveJobs();
     void LoadJobs();
+
+    // Tray
+    void CreateTrayIcon();
+    void UpdateTrayIcon();
+    void RemoveTrayIcon();
+    void ShowTrayMenu();
+    void MinimizeToTray();
+    void RestoreFromTray();
+
+    // Scheduling
+    void StartScheduleTimer();
+    void CheckSchedules();
+    void UpdateStartWithWindows();
+
+    // Settings dialog
+    void ShowSettingsDialog();
 
     // Layout helpers
     void RepositionChildren();
@@ -96,6 +119,23 @@ public:
     bool         m_statusDismissed = false;
     bool         m_isAdmin         = false;
 private:
+
+    // Global settings
+    bool m_closeToTray      = true;
+    bool m_startWithWindows = false;
+
+    // Tray icon
+    NOTIFYICONDATAW m_nid = {};
+    bool m_trayIconActive  = false;
+    bool m_minimizedToTray = false;
+
+    // Scheduling
+    ULONGLONG m_lastScheduleCheck = 0;
+    // Per-job: tick of last scheduled run (to avoid re-triggering)
+    std::vector<ULONGLONG> m_lastScheduledRun;
+
+    // Folder watchers (one per job with smart defer enabled)
+    std::vector<std::unique_ptr<FolderWatcher>> m_watchers;
 
     // GDI / cursors
     HFONT   m_fontUI     = nullptr;

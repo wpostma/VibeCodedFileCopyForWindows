@@ -9,6 +9,9 @@
 // ── Job status ───────────────────────────────────────────────────────────────
 enum class JobStatus { Idle, Scanning, Copying, Paused, Done, Error, Stopped };
 
+// ── Schedule type ────────────────────────────────────────────────────────────
+enum class ScheduleType { Manual, Interval, Daily };
+
 // ── Log entry (one row in the log panel) ─────────────────────────────────────
 struct LogEntry {
     std::wstring timestamp;   // e.g. L"2026.03.01 11:56:43.mmm"
@@ -41,6 +44,18 @@ struct CopyJob {
     std::wstring  sourcePath;
     std::wstring  destPath;
 
+    // Schedule
+    ScheduleType  scheduleType  = ScheduleType::Manual;
+    int           scheduleValue = 60;   // minutes (Interval) or HHMM (Daily)
+
+    // Filters (semicolon-delimited wildcard patterns)
+    std::wstring  excludePatterns;      // e.g. L"*.tmp;~$*;Thumbs.db"
+    std::wstring  includePatterns;      // empty = include all
+
+    // Smart defer
+    bool          smartDefer      = false;
+    int           quietPeriodMin  = 5;
+
     // Runtime state (main-thread only except cancelFlag)
     JobStatus     status       = JobStatus::Idle;
     ULONGLONG     runStartTick = 0;   // GetTickCount64() when run began
@@ -51,6 +66,9 @@ struct CopyJob {
 
     // Log slot for the live "current file" row (main-thread only)
     int curFileLogIdx = -1;
+
+    // Smart defer: last detected activity in source folder (main-thread only)
+    ULONGLONG lastActivityTick = 0;
 
     // Thread control
     HANDLE                               threadHandle = nullptr;

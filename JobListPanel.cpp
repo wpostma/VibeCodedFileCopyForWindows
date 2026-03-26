@@ -141,13 +141,18 @@ HFONT JobListPanel::CreateFont_(int ptSize, bool bold)
     return CreateFontIndirectW(&lf);
 }
 
-// ── Paint ─────────────────────────────────────────────────────────────────────
+// ── Job card painting ─────────────────────────────────────────────────────────
+// Each job is painted as a two-line "card" row:
+//   Row 1: [job name (bold, left)]  [last run time · changes · errors (right)]
+//   Row 2: [status/progress/schedule (left)]  [bytes · files · folders (right)]
+// A 4px color accent stripe on the left edge indicates job state.
+// During active copy, row 2 shows: pct% · X of Y files · speed · ETA
 
 void JobListPanel::PaintRow(HDC dc, const RECT& rc, int idx, bool selected)
 {
     const CopyJob& job = *(*m_jobs)[idx];
 
-    // Background
+    // Card background: alternating colors, or selection highlight
     COLORREF bg = selected ? JC::BgSel : ((idx & 1) ? JC::BgEven : JC::BgOdd);
     HBRUSH hbr = CreateSolidBrush(bg);
     FillRect(dc, &rc, hbr);
@@ -161,15 +166,21 @@ void JobListPanel::PaintRow(HDC dc, const RECT& rc, int idx, bool selected)
     SelectObject(dc, hOld);
     DeleteObject(hpen);
 
-    // Left edge stripe: blue=running, amber=paused
-    if (job.status == JobStatus::Copying || job.status == JobStatus::Scanning) {
-        HBRUSH hBar = CreateSolidBrush(JC::RunBar);
-        RECT barRc = { rc.left, rc.top, rc.left + 3, rc.bottom - 1 };
-        FillRect(dc, &barRc, hBar);
-        DeleteObject(hBar);
-    } else if (job.status == JobStatus::Paused) {
-        HBRUSH hBar = CreateSolidBrush(RGB(210, 140, 30));
-        RECT barRc = { rc.left, rc.top, rc.left + 3, rc.bottom - 1 };
+    // Left edge accent stripe (4px): blue=running, amber=paused, green=done, red=error
+    COLORREF barColor = 0;
+    bool showBar = true;
+    switch (job.status) {
+    case JobStatus::Copying:
+    case JobStatus::Scanning: barColor = JC::RunBar; break;
+    case JobStatus::Paused:   barColor = RGB(210, 140, 30);  break;
+    case JobStatus::Done:     barColor = RGB( 60, 170,  80); break;
+    case JobStatus::Error:    barColor = RGB(200,  50,  50); break;
+    case JobStatus::Stopped:  barColor = RGB(160, 160, 160); break;
+    default:                  showBar = false;
+    }
+    if (showBar) {
+        HBRUSH hBar = CreateSolidBrush(barColor);
+        RECT barRc = { rc.left, rc.top, rc.left + 4, rc.bottom - 1 };
         FillRect(dc, &barRc, hBar);
         DeleteObject(hBar);
     }
@@ -207,77 +218,65 @@ void JobListPanel::PaintRow(HDC dc, const RECT& rc, int idx, bool selected)
     SetTextColor(dc, JC::TxtSub);
     std::wstring r2Left;
     if (job.status == JobStatus::Idle || job.status == JobStatus::Done) {
-        r2Left = job.nextRunTime.empty() ? L"Ready" : (L"Next scan " + job.nextRunTime);
+        r2Left = job.nextRunTime.empty() ? L"Ready" : (L"Next run " + job.nextRunTime);
     } else if (job.status == JobStatus::Copying && job.stats.bytesToCopy > 0
                && job.stats.copiedBytes > 0) {
         int pct = (int)(job.stats.copiedBytes * 100 / job.stats.bytesToCopy);
         if (pct > 100) pct = 100;
 
-        // Estimate end time from copy rate
+        // Speed: average bytes/sec over entire run elapsed time
         ULONGLONG elapsed = GetTickCount64() - job.runStartTick;
-        std::wstring eta;
-        if (elapsed > 3000 && job.stats.copiedBytes > 0) {
-            // remaining ms = elapsed * bytesLeft / bytesDone
-            ULONGLONG bytesLeft = job.stats.bytesToCopy - job.stats.copiedBytes;
-            ULONGLONG remainMs  = elapsed * bytesLeft / job.stats.copiedBytes;
-
-            // Add 15 min padding, then round up to nearest 15 min.
-            remainMs += 15ULL * 60 * 1000;
-
-            SYSTEMTIME now;
-            GetLocalTime(&now);
-            FILETIME ft;
-            SystemTimeToFileTime(&now, &ft);
-            ULARGE_INTEGER uli;
-            uli.LowPart  = ft.dwLowDateTime;
-            uli.HighPart = ft.dwHighDateTime;
-            uli.QuadPart += remainMs * 10000ULL;   // FILETIME = 100ns ticks
-            ft.dwLowDateTime  = uli.LowPart;
-            ft.dwHighDateTime = uli.HighPart;
-            SYSTEMTIME st;
-            FileTimeToSystemTime(&ft, &st);
-
-            // Round up to next 15-minute boundary
-            int m = st.wMinute;
-            if (st.wSecond > 0 || st.wMilliseconds > 0)
-                m++;   // any partial minute counts as next
-            int rounded = ((m + 14) / 15) * 15;  // ceil to 15
-            int extraMin = rounded - st.wMinute;
-            if (extraMin > 0) {
-                uli.LowPart  = ft.dwLowDateTime;
-                uli.HighPart = ft.dwHighDateTime;
-                uli.QuadPart += (ULONGLONG)extraMin * 60ULL * 10000000ULL;
-                ft.dwLowDateTime  = uli.LowPart;
-                ft.dwHighDateTime = uli.HighPart;
-                FileTimeToSystemTime(&ft, &st);
+        std::wstring speedStr;
+        if (elapsed > 2000 && job.stats.copiedBytes > 0) {
+            double speedBps = (double)job.stats.copiedBytes / (elapsed / 1000.0);
+            if (speedBps >= (1024.0 * 1024.0 * 1024.0)) {
+                wchar_t sb[32]; swprintf_s(sb, L"%.1f GB/s", speedBps / (1024.0*1024.0*1024.0));
+                speedStr = sb;
+            } else if (speedBps >= (1024.0 * 1024.0)) {
+                wchar_t sb[32]; swprintf_s(sb, L"%.0f MB/s", speedBps / (1024.0*1024.0));
+                speedStr = sb;
+            } else {
+                wchar_t sb[32]; swprintf_s(sb, L"%.0f KB/s", speedBps / 1024.0);
+                speedStr = sb;
             }
-            st.wSecond = 0; st.wMilliseconds = 0;
-
-            int h12  = st.wHour % 12;
-            if (h12 == 0) h12 = 12;
-            const wchar_t* ampm = (st.wHour < 12) ? L"AM" : L"PM";
-
-            wchar_t etaBuf[64];
-            if (st.wYear == now.wYear && st.wMonth == now.wMonth && st.wDay == now.wDay)
-                swprintf_s(etaBuf, L", est. done by %d:%02d %s",
-                           h12, st.wMinute, ampm);
-            else
-                swprintf_s(etaBuf, L", est. done by %d:%02d %s %d/%d",
-                           h12, st.wMinute, ampm, st.wMonth, st.wDay);
-            eta = etaBuf;
         }
 
-        wchar_t buf[128];
-        swprintf_s(buf, L"Copying... (%d%% complete%s)", pct, eta.c_str());
+        // ETA: remaining bytes / current speed
+        std::wstring eta;
+        if (elapsed > 2000 && job.stats.copiedBytes > 0) {
+            ULONGLONG bytesLeft = job.stats.bytesToCopy - job.stats.copiedBytes;
+            ULONGLONG remainSec = (elapsed * bytesLeft / job.stats.copiedBytes) / 1000;
+            if (remainSec < 60) {
+                wchar_t eb[32]; swprintf_s(eb, L"%llus left", remainSec);
+                eta = eb;
+            } else if (remainSec < 3600) {
+                wchar_t eb[32]; swprintf_s(eb, L"%llum %llus left", remainSec/60, remainSec%60);
+                eta = eb;
+            } else {
+                wchar_t eb[32]; swprintf_s(eb, L"%lluh %llum left", remainSec/3600, (remainSec%3600)/60);
+                eta = eb;
+            }
+        }
+
+        wchar_t buf[256];
+        swprintf_s(buf, L"%llu of %llu files \xB7 %s of %s",
+            job.stats.copiedFiles, job.stats.changeCount,
+            FmtBytes(job.stats.copiedBytes).c_str(),
+            FmtBytes(job.stats.bytesToCopy).c_str());
         r2Left = buf;
+        if (!speedStr.empty()) { r2Left += L" \xB7 "; r2Left += speedStr; }
+        if (!eta.empty())      { r2Left += L" \xB7 "; r2Left += eta; }
+        r2Left = std::wstring(L"Copying ") + std::to_wstring(pct) + L"% \xB7 " + r2Left;
     } else {
         r2Left = StatusLabel(job.status);
     }
+    // Row 2 left gets more space when actively copying (speed+ETA can be long)
+    int r2RightReserve = (job.status == JobStatus::Copying) ? 10 : 260;
     RECT r2L = { rc.left + padX, rc.top + row2Y,
-                 rc.right - 260, rc.top + row2Y + m_subH };
+                 rc.right - r2RightReserve, rc.top + row2Y + m_subH };
     DrawTextW(dc, r2Left.c_str(), -1, &r2L, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-    // ── Row 2 right: "Z GB · M files · N folders" ────────────────────────────
+    // ── Row 2 right: "Z GB · M files · N folders" (hidden while copying) ────
     std::wstring r2Right;
     if (job.stats.totalFiles > 0 || job.stats.copiedBytes > 0) {
         wchar_t tmp[128];

@@ -11,7 +11,7 @@
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS")
 
-int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
+int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR lpCmdLine, int nCmdShow)
 {
     // Enable visual styles (requires comctl32 v6 via manifest or pragma)
     INITCOMMONCONTROLSEX icex = { sizeof(icex),
@@ -20,11 +20,19 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
+    // Check for --minimized flag (used by "Start with Windows")
+    bool startMinimized = false;
+    if (lpCmdLine && wcsstr(lpCmdLine, L"--minimized"))
+        startMinimized = true;
+
     MainWindow wnd;
     if (!wnd.Create(hInstance)) {
         MessageBoxW(nullptr, L"Failed to create main window.", L"Error", MB_OK | MB_ICONERROR);
         return 1;
     }
+
+    if (startMinimized)
+        nCmdShow = SW_HIDE;
 
     wnd.Show(nCmdShow);
 

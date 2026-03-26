@@ -111,8 +111,22 @@ struct FileEntry {
     bool         isDir;
 };
 
+// ── Filter helpers ───────────────────────────────────────────────────────────
+
+static bool MatchesAnyPattern(const wchar_t* filename,
+                               const std::vector<std::wstring>& patterns)
+{
+    for (const auto& pat : patterns)
+        if (PathMatchSpecW(filename, pat.c_str()))
+            return true;
+    return false;
+}
+
 static void EnumerateDir(const std::wstring& root, const std::wstring& rel,
-                          std::vector<FileEntry>& out)
+                          std::vector<FileEntry>& out,
+                          const std::vector<std::wstring>& excludes = {},
+                          const std::vector<std::wstring>& includes = {},
+                          std::vector<std::wstring>* skippedSymlinks = nullptr)
 {
     std::wstring pattern = root + L"\\" + rel + L"*";
     WIN32_FIND_DATAW fd;
@@ -125,6 +139,25 @@ static void EnumerateDir(const std::wstring& root, const std::wstring& rel,
         if (_wcsicmp(fd.cFileName, L"nul") == 0)
             continue;
 
+        // Skip symlinks/junctions/reparse points to avoid infinite recursion.
+        // A junction pointing to a parent directory would loop forever.
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+            if (skippedSymlinks)
+                skippedSymlinks->push_back(rel + fd.cFileName);
+            continue;
+        }
+
+        // Exclude filter applies to both files and directories.
+        // A pattern like ".git" or "node_modules" skips the entire subtree.
+        // Include filter applies to files only (directories are always recursed
+        // unless excluded, so you can include "*.cpp" without blocking folders).
+        if (!excludes.empty() && MatchesAnyPattern(fd.cFileName, excludes))
+            continue;
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            if (!includes.empty() && !MatchesAnyPattern(fd.cFileName, includes))
+                continue;
+        }
+
         std::wstring relChild = rel + fd.cFileName;
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
@@ -134,7 +167,7 @@ static void EnumerateDir(const std::wstring& root, const std::wstring& rel,
             fe.size      = 0;
             fe.isDir     = true;
             out.push_back(fe);
-            EnumerateDir(root, relChild + L"\\", out);
+            EnumerateDir(root, relChild + L"\\", out, excludes, includes, skippedSymlinks);
         } else {
             FileEntry fe;
             fe.relPath   = relChild;
@@ -342,7 +375,13 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
     PostLog(hwnd, idx, L"Preparing...", 1, true);
 
     std::vector<FileEntry> files;
-    EnumerateDir(params.sourcePath, L"", files);
+    std::vector<std::wstring> skippedSymlinks;
+    EnumerateDir(params.sourcePath, L"", files, params.excludePatterns,
+                 params.includePatterns, &skippedSymlinks);
+
+    // Log skipped symlinks/junctions so the user knows
+    for (const auto& sl : skippedSymlinks)
+        PostLog(hwnd, idx, L"Skipped symlink/junction: " + sl, 1);
 
     if (cancel->load()) {
         PostLog(hwnd, idx, L"Stopped by user", 1);
