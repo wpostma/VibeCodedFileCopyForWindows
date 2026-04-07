@@ -317,9 +317,21 @@ static DWORD WINAPI CopyWorkerProc(LPVOID lpParam)
 
         if (!ok && !cancelled) {
             DWORD err = GetLastError();
+            const wchar_t* desc;
+            switch (err) {
+                case ERROR_ACCESS_DENIED:        desc = L" - Access denied";        break;
+                case ERROR_SHARING_VIOLATION:    desc = L" - File in use";          break;
+                case ERROR_DISK_FULL:            desc = L" - Disk full";            break;
+                case ERROR_PATH_NOT_FOUND:       desc = L" - Path not found";       break;
+                case ERROR_FILE_NOT_FOUND:       desc = L" - File not found";       break;
+                case ERROR_WRITE_PROTECT:        desc = L" - Write protected";      break;
+                case ERROR_NETWORK_UNREACHABLE:  desc = L" - Network unreachable";  break;
+                case ERROR_NETNAME_DELETED:      desc = L" - Network path lost";    break;
+                default:                         desc = L"";                        break;
+            }
             wchar_t msg[300];
-            swprintf_s(msg, L"Error copying %s  (0x%08X)",
-                       item.relPath.c_str(), err);
+            swprintf_s(msg, L"Error copying %s  (0x%08X%s)",
+                       item.relPath.c_str(), err, desc);
             PostLog(st->hwnd, st->jobIndex, msg, 2);
         } else if (!cancelled) {
             PostProgress(st->hwnd, st->jobIndex, snapshot, JobStatus::Copying);
@@ -387,6 +399,56 @@ static DWORD WINAPI CopyThreadProc(LPVOID lpParam)
         PostLog(hwnd, idx, L"Stopped by user", 1);
         PostMessageW(hwnd, WM_JOB_DONE, (WPARAM)idx, 0);
         return 0;
+    }
+
+    // ── Pre-flight: destination must exist and be writable ───────────────────
+    {
+        // Try to create destination root (ERROR_ALREADY_EXISTS is fine).
+        if (!CreateDirectoryW(params.destPath.c_str(), nullptr)) {
+            DWORD err = GetLastError();
+            if (err != ERROR_ALREADY_EXISTS) {
+                AccessCheckInfo info{ params.destPath, err };
+                LRESULT ans = SendMessageW(hwnd, WM_JOB_ACCESS_CHECK,
+                                           (WPARAM)idx, (LPARAM)&info);
+                // Retry after user-initiated fix
+                if (ans != IDYES || (!CreateDirectoryW(params.destPath.c_str(), nullptr)
+                                      && GetLastError() != ERROR_ALREADY_EXISTS)) {
+                    PostLog(hwnd, idx, L"Stopped: cannot create destination folder", 1);
+                    JobStats empty{};
+                    PostProgress(hwnd, idx, empty, JobStatus::Error);
+                    PostMessageW(hwnd, WM_JOB_DONE, (WPARAM)idx, 1);
+                    return 0;
+                }
+            }
+        }
+
+        // Probe write access: create a zero-byte temp file and delete it immediately.
+        std::wstring testFile = params.destPath + L"\\.fcu_write_test";
+        HANDLE hTest = CreateFileW(testFile.c_str(), GENERIC_WRITE, 0, nullptr,
+                                   CREATE_ALWAYS,
+                                   FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
+                                   nullptr);
+        if (hTest == INVALID_HANDLE_VALUE) {
+            DWORD err = GetLastError();
+            AccessCheckInfo info{ params.destPath, err };
+            LRESULT ans = SendMessageW(hwnd, WM_JOB_ACCESS_CHECK,
+                                       (WPARAM)idx, (LPARAM)&info);
+            if (ans == IDYES) {
+                // Retry after user fixed permissions
+                hTest = CreateFileW(testFile.c_str(), GENERIC_WRITE, 0, nullptr,
+                                    CREATE_ALWAYS,
+                                    FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
+                                    nullptr);
+            }
+            if (hTest == INVALID_HANDLE_VALUE) {
+                PostLog(hwnd, idx, L"Stopped: destination folder is not writable", 1);
+                JobStats empty{};
+                PostProgress(hwnd, idx, empty, JobStatus::Error);
+                PostMessageW(hwnd, WM_JOB_DONE, (WPARAM)idx, 1);
+                return 0;
+            }
+        }
+        CloseHandle(hTest);
     }
 
     // ── Set up shared state ──────────────────────────────────────────────

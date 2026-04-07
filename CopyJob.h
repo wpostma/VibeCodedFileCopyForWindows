@@ -103,3 +103,10 @@ struct SpaceCheckInfo {
     ULONGLONG freeBytes;
     ULONGLONG neededBytes;
 };
+
+// Passed via LPARAM of WM_JOB_ACCESS_CHECK (scanner-thread stack; SendMessage blocks).
+// winError is the raw GetLastError() value — e.g. ERROR_ACCESS_DENIED, ERROR_WRITE_PROTECT.
+struct AccessCheckInfo {
+    std::wstring destPath;   // long-path-prefixed destination (\\?\C:\...)
+    DWORD        winError;
+};
