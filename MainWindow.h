@@ -37,6 +37,7 @@ private:
     void OnJobProgress(int jobIdx, ProgressMsg* msg);
     void OnJobLog(int jobIdx, LogMsg* msg);
     void OnJobDone(int jobIdx, ULONGLONG errors);
+    LRESULT OnJobAccessCheck(AccessCheckInfo* info);
     void OnTimer(UINT_PTR timerId);
     void OnTrayIcon(LPARAM lp);
     void OnPowerBroadcast(WPARAM event);

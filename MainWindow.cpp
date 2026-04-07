@@ -812,6 +812,100 @@ void MainWindow::OnJobDone(int jobIdx, ULONGLONG errors)
     }
 }
 
+// ── Destination write permission check / UAC fix ──────────────────────────────
+LRESULT MainWindow::OnJobAccessCheck(AccessCheckInfo* info)
+{
+    // Strip the \\?\ long-path prefix for display and for passing to icacls.
+    std::wstring displayPath = info->destPath;
+    if (displayPath.size() >= 4 &&
+        displayPath[0] == L'\\' && displayPath[1] == L'\\' &&
+        displayPath[2] == L'?'  && displayPath[3] == L'\\')
+    {
+        displayPath = displayPath.substr(4);
+    }
+
+    // Read-only media cannot be fixed via icacls — just tell the user.
+    if (info->winError == ERROR_WRITE_PROTECT) {
+        wchar_t buf[512];
+        swprintf_s(buf,
+            L"The destination is on write-protected (read-only) media and cannot be written to:\n\n"
+            L"  %s\n\n"
+            L"Please choose a different destination folder.",
+            displayPath.c_str());
+        MessageBoxW(m_hwnd, buf, L"Destination Is Read-Only", MB_OK | MB_ICONERROR);
+        return IDNO;
+    }
+
+    // For all other errors (typically ERROR_ACCESS_DENIED), offer a UAC-elevated fix.
+    wchar_t errName[64];
+    swprintf_s(errName, L"0x%08X", info->winError);
+    if (info->winError == ERROR_ACCESS_DENIED) wcscpy_s(errName, L"Access denied");
+
+    wchar_t body[1024];
+    swprintf_s(body,
+        L"The destination folder is not writable:\n\n"
+        L"  %s\n\n"
+        L"Windows error: %s\n\n"
+        L"This is usually caused by missing NTFS write permissions. "
+        L"Click 'Fix Permissions' to grant write access to this folder "
+        L"(requires administrator approval).",
+        displayPath.c_str(), errName);
+
+    // Use TaskDialogIndirect for a proper Windows-style dialog with descriptive buttons.
+    const TASKDIALOG_BUTTON buttons[] = {
+        { IDYES, L"Fix Permissions\n(Requires administrator approval)" },
+        { IDNO,  L"Cancel" },
+    };
+    TASKDIALOGCONFIG tdc   = { sizeof(tdc) };
+    tdc.hwndParent         = m_hwnd;
+    tdc.pszWindowTitle     = L"File Copy Utility";
+    tdc.pszMainIcon        = TD_WARNING_ICON;
+    tdc.pszMainInstruction = L"Destination folder is not writable";
+    tdc.pszContent         = body;
+    tdc.pButtons           = buttons;
+    tdc.cButtons           = 2;
+    tdc.nDefaultButton     = IDNO;
+    tdc.dwFlags            = TDF_USE_COMMAND_LINKS;
+
+    int nBtn = IDNO;
+    if (FAILED(TaskDialogIndirect(&tdc, &nBtn, nullptr, nullptr)))
+        nBtn = IDNO;
+
+    if (nBtn != IDYES)
+        return IDNO;
+
+    // Launch an elevated cmd.exe that runs icacls to grant BUILTIN\Users full control.
+    // We use the SDDL SID *S-1-5-32-545 so this works regardless of the system language.
+    wchar_t params[1024];
+    swprintf_s(params,
+        L"/c icacls \"%s\" /grant *S-1-5-32-545:(OI)(CI)F /T",
+        displayPath.c_str());
+
+    SHELLEXECUTEINFOW sei = { sizeof(sei) };
+    sei.fMask             = SEE_MASK_NOCLOSEPROCESS;
+    sei.hwnd              = m_hwnd;
+    sei.lpVerb            = L"runas";   // triggers UAC elevation
+    sei.lpFile            = L"cmd.exe";
+    sei.lpParameters      = params;
+    sei.nShow             = SW_HIDE;
+
+    if (!ShellExecuteExW(&sei)) {
+        DWORD err = GetLastError();
+        wchar_t msg[256];
+        swprintf_s(msg,
+            L"Could not launch the elevated permission-fix process (0x%08X).\n\n"
+            L"Try running File Copy Utility as administrator.",
+            err);
+        MessageBoxW(m_hwnd, msg, L"Permission Fix Failed", MB_OK | MB_ICONERROR);
+        return IDNO;
+    }
+
+    // Wait up to 30 s for icacls to finish, then tell the engine to retry.
+    WaitForSingleObject(sei.hProcess, 30000);
+    CloseHandle(sei.hProcess);
+    return IDYES;
+}
+
 // ── Splitter drag ─────────────────────────────────────────────────────────────
 void MainWindow::OnMouseMove(int x, int y, DWORD keys)
 {
@@ -1290,6 +1384,9 @@ LRESULT CALLBACK MainWindow::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return MessageBoxW(pThis->m_hwnd, buf, L"Low Disk Space",
                            MB_YESNO | MB_ICONWARNING);
     }
+
+    case WM_JOB_ACCESS_CHECK:
+        return pThis->OnJobAccessCheck(reinterpret_cast<AccessCheckInfo*>(lp));
 
     case WM_TIMER:
         pThis->OnTimer((UINT_PTR)wp);
