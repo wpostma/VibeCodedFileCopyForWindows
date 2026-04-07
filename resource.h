@@ -66,6 +66,7 @@
 #define WM_TRAYICON             (WM_APP + 5)   // Shell_NotifyIcon callback
 #define WM_JOB_CHANGED          (WM_APP + 6)   // FolderWatcher: source directory changed
 #define WM_SCHEDULE_TIMER       (WM_APP + 7)   // schedule check timer
+#define WM_JOB_ACCESS_CHECK     (WM_APP + 8)   // lParam = AccessCheckInfo* (stack; SendMessage blocks)
 
 // Timer IDs
 #define IDT_SCHEDULE_POLL       5001
