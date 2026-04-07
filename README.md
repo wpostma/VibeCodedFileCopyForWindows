@@ -212,3 +212,10 @@ FileCopyUtility/
 └── tests/
     └── test_main.cpp     16 unit tests (no external dependencies)
 ```
+
+
+## Download link
+
+Browse to the Actions tab of this GitHub repo, or go to the Wiki page:
+
+https://github.com/wpostma/VibeCodedFileCopyForWindows/wiki
