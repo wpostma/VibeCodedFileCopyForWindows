@@ -1261,10 +1261,10 @@ void MainWindow::OnCommand(int id, HWND)
     case ID_TRAY_EXIT:      m_closeToTray = false; DestroyWindow(m_hwnd); break;
     case ID_HELP_ABOUT:
         MessageBoxW(m_hwnd,
-            L"File Copy Utility v2.0\n\n"
+            L"File Copy Utility v2.1\n\n"
             L"A lightweight backup and file copy tool.\n"
             L"Built with pure Win32 API + Claude.\n\n"
-            L"https://github.com/",
+            L"https://github.com/wpostma/VibeCodedFileCopyForWindows",
             L"About File Copy Utility", MB_OK | MB_ICONINFORMATION);
         break;
     case ID_OPTIONS_SETTINGS:
