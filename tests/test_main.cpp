@@ -90,6 +90,32 @@ TEST(filter_match_case_insensitive)
     g_pass++;
 }
 
+TEST(filter_match_relative_path_exact)
+{
+    std::vector<std::wstring> patterns{L"AppData\\Local\\DockerSandboxes"};
+    ASSERT_TRUE(MatchesFilterPattern(L"AppData\\Local\\DockerSandboxes",
+                                     L"DockerSandboxes", true, patterns));
+    g_pass++;
+}
+
+TEST(filter_match_relative_path_subtree_wildcard)
+{
+    std::vector<std::wstring> patterns{L"AppData\\Local\\DockerSandboxes\\*"};
+    ASSERT_TRUE(MatchesFilterPattern(L"AppData\\Local\\DockerSandboxes",
+                                     L"DockerSandboxes", true, patterns));
+    g_pass++;
+}
+
+TEST(filter_match_leaf_name_still_works)
+{
+    std::vector<std::wstring> patterns{L"node_modules"};
+    ASSERT_TRUE(MatchesFilterPattern(L"src\\node_modules",
+                                     L"node_modules", true, patterns));
+    ASSERT_FALSE(MatchesFilterPattern(L"src\\packages",
+                                      L"packages", true, patterns));
+    g_pass++;
+}
+
 // ── Test: ToLongPath ────────────────────────────────────────────────────────
 
 static std::wstring ToLongPath(const std::wstring& p)
