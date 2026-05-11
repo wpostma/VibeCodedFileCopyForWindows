@@ -1,6 +1,7 @@
 #pragma once
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shlwapi.h>
 #include <string>
 #include <vector>
 
@@ -36,4 +37,45 @@ inline std::vector<std::wstring> SplitPatterns(const std::wstring& s)
         start = sep + 1;
     }
     return out;
+}
+
+inline bool MatchesFilterPattern(const std::wstring& relPath,
+                                 const wchar_t* leafName,
+                                 bool isDir,
+                                 const std::vector<std::wstring>& patterns)
+{
+    std::wstring relNorm = relPath;
+    for (auto& ch : relNorm)
+        if (ch == L'/') ch = L'\\';
+    while (!relNorm.empty() && relNorm.back() == L'\\')
+        relNorm.pop_back();
+
+    for (const auto& rawPattern : patterns) {
+        std::wstring pattern = rawPattern;
+        for (auto& ch : pattern)
+            if (ch == L'/') ch = L'\\';
+
+        bool subtreeWildcard = false;
+        if (pattern.size() >= 2 && pattern.compare(pattern.size() - 2, 2, L"\\*") == 0) {
+            subtreeWildcard = true;
+            pattern.erase(pattern.size() - 2);
+        }
+        while (!pattern.empty() && pattern.back() == L'\\')
+            pattern.pop_back();
+        if (pattern.empty())
+            continue;
+
+        bool pathPattern = pattern.find(L'\\') != std::wstring::npos;
+        if (pathPattern) {
+            if (PathMatchSpecW(relNorm.c_str(), pattern.c_str()))
+                return true;
+            if (subtreeWildcard && isDir && _wcsicmp(relNorm.c_str(), pattern.c_str()) == 0)
+                return true;
+            continue;
+        }
+
+        if (leafName && PathMatchSpecW(leafName, pattern.c_str()))
+            return true;
+    }
+    return false;
 }
