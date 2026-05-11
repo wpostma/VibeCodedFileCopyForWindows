@@ -111,17 +111,6 @@ struct FileEntry {
     bool         isDir;
 };
 
-// ── Filter helpers ───────────────────────────────────────────────────────────
-
-static bool MatchesAnyPattern(const wchar_t* filename,
-                               const std::vector<std::wstring>& patterns)
-{
-    for (const auto& pat : patterns)
-        if (PathMatchSpecW(filename, pat.c_str()))
-            return true;
-    return false;
-}
-
 static void EnumerateDir(const std::wstring& root, const std::wstring& rel,
                           std::vector<FileEntry>& out,
                           const std::vector<std::wstring>& excludes = {},
@@ -147,20 +136,21 @@ static void EnumerateDir(const std::wstring& root, const std::wstring& rel,
             continue;
         }
 
+        std::wstring relChild = rel + fd.cFileName;
+        bool isDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+
         // Exclude filter applies to both files and directories.
         // A pattern like ".git" or "node_modules" skips the entire subtree.
         // Include filter applies to files only (directories are always recursed
         // unless excluded, so you can include "*.cpp" without blocking folders).
-        if (!excludes.empty() && MatchesAnyPattern(fd.cFileName, excludes))
+        if (!excludes.empty() && MatchesFilterPattern(relChild, fd.cFileName, isDir, excludes))
             continue;
-        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            if (!includes.empty() && !MatchesAnyPattern(fd.cFileName, includes))
+        if (!isDir) {
+            if (!includes.empty() && !MatchesFilterPattern(relChild, fd.cFileName, false, includes))
                 continue;
         }
 
-        std::wstring relChild = rel + fd.cFileName;
-
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        if (isDir) {
             FileEntry fe;
             fe.relPath   = relChild + L"\\";
             fe.lastWrite = fd.ftLastWriteTime;
