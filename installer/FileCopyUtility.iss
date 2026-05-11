@@ -1,8 +1,8 @@
 #define MyAppName "File Copy Utility"
 #define MyAppExeName "FileCopyUtility.exe"
-#define MyAppVersion "2.0.0"
-#define MyAppPublisher "Warren"
-#define MyAppURL "https://github.com/"
+#define MyAppVersion "2.1.0"
+#define MyAppPublisher "Warren Postma"
+#define MyAppURL "https://github.com/wpostma/VibeCodedFileCopyForWindows"
 
 [Setup]
 AppId={{8E45C52A-4F44-45FD-A8CA-F8413A906070}
