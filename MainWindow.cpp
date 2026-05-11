@@ -59,7 +59,7 @@ bool MainWindow::Create(HINSTANCE hInst)
     if (!JobListPanel::RegisterClass(hInst)) return false;
     if (!LogPanel::RegisterClass(hInst))     return false;
 
-    m_hwnd = CreateWindowExW(0, k_WndClass, L"File Copy Utility v2.0",
+    m_hwnd = CreateWindowExW(0, k_WndClass, L"File Copy Utility v2.1",
                  WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                  CW_USEDEFAULT, CW_USEDEFAULT, 760, 640,
                  nullptr, nullptr, hInst, this);
