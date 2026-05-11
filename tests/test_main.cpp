@@ -66,6 +66,20 @@ TEST(split_patterns_single)
     g_pass++;
 }
 
+TEST(normalize_patterns_for_editor)
+{
+    auto s = NormalizePatternsForEditor(L"*.tmp; node_modules\r\nThumbs.db");
+    ASSERT_TRUE(s == L"*.tmp\r\nnode_modules\r\nThumbs.db");
+    g_pass++;
+}
+
+TEST(normalize_patterns_for_storage)
+{
+    auto s = NormalizePatternsForStorage(L"*.tmp\r\nnode_modules;Thumbs.db\n");
+    ASSERT_TRUE(s == L"*.tmp;node_modules;Thumbs.db");
+    g_pass++;
+}
+
 // ── Test: PathMatchSpecW (filter matching) ──────────────────────────────────
 
 TEST(filter_match_wildcard)

@@ -211,8 +211,8 @@ void MainWindow::SaveJobs()
         IniWriteULL(sec, L"ScheduleValue", (ULONGLONG)job.scheduleValue, ini);
 
         // Filters
-        IniWrite(sec, L"ExcludePatterns", job.excludePatterns, ini);
-        IniWrite(sec, L"IncludePatterns", job.includePatterns, ini);
+        IniWrite(sec, L"ExcludePatterns", NormalizePatternsForStorage(job.excludePatterns), ini);
+        IniWrite(sec, L"IncludePatterns", NormalizePatternsForStorage(job.includePatterns), ini);
 
         // Smart defer
         IniWriteULL(sec, L"SmartDefer",    job.smartDefer ? 1 : 0, ini);
@@ -260,8 +260,8 @@ void MainWindow::LoadJobs()
         if (sv > 0) job->scheduleValue = sv;
 
         // Filters
-        job->excludePatterns = IniReadLong(sec, L"ExcludePatterns", ini);
-        job->includePatterns = IniReadLong(sec, L"IncludePatterns", ini);
+        job->excludePatterns = NormalizePatternsForEditor(IniReadLong(sec, L"ExcludePatterns", ini));
+        job->includePatterns = NormalizePatternsForEditor(IniReadLong(sec, L"IncludePatterns", ini));
 
         // Smart defer
         job->smartDefer     = IniReadULL(sec, L"SmartDefer", ini) != 0;
@@ -534,7 +534,8 @@ void MainWindow::RefreshLogPanel()
 void MainWindow::CmdNewJob()
 {
     AddJobDlgData data;
-    data.excludePatterns = L"*.tmp;~$*;Thumbs.db;desktop.ini;.DS_Store;.git;node_modules";
+    data.excludePatterns = NormalizePatternsForEditor(
+        L"*.tmp;~$*;Thumbs.db;desktop.ini;.DS_Store;.git;node_modules");
     if (!ShowAddJobDialog(m_hwnd, m_hInst, data)) return;
 
     auto job = std::make_unique<CopyJob>();

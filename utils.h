@@ -39,6 +39,28 @@ inline std::vector<std::wstring> SplitPatterns(const std::wstring& s)
     return out;
 }
 
+inline std::wstring JoinPatterns(const std::vector<std::wstring>& patterns,
+                                 const wchar_t* separator)
+{
+    std::wstring out;
+    for (size_t i = 0; i < patterns.size(); ++i) {
+        if (i != 0)
+            out += separator;
+        out += patterns[i];
+    }
+    return out;
+}
+
+inline std::wstring NormalizePatternsForEditor(const std::wstring& s)
+{
+    return JoinPatterns(SplitPatterns(s), L"\r\n");
+}
+
+inline std::wstring NormalizePatternsForStorage(const std::wstring& s)
+{
+    return JoinPatterns(SplitPatterns(s), L";");
+}
+
 inline bool MatchesFilterPattern(const std::wstring& relPath,
                                  const wchar_t* leafName,
                                  bool isDir,

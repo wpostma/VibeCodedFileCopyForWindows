@@ -4,6 +4,7 @@
 #include <string>
 #include "AddJobDlg.h"
 #include "resource.h"
+#include "utils.h"
 
 // ── Folder browse using IFileOpenDialog ───────────────────────────────────────
 
@@ -116,9 +117,11 @@ static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
 
         // Filters
         if (!ctx->data->excludePatterns.empty())
-            SetDlgItemTextW(hDlg, IDC_EDIT_EXCLUDE, ctx->data->excludePatterns.c_str());
+            SetDlgItemTextW(hDlg, IDC_EDIT_EXCLUDE,
+                            NormalizePatternsForEditor(ctx->data->excludePatterns).c_str());
         if (!ctx->data->includePatterns.empty())
-            SetDlgItemTextW(hDlg, IDC_EDIT_INCLUDE, ctx->data->includePatterns.c_str());
+            SetDlgItemTextW(hDlg, IDC_EDIT_INCLUDE,
+                            NormalizePatternsForEditor(ctx->data->includePatterns).c_str());
 
         // Focus on name field
         SetFocus(GetDlgItem(hDlg, IDC_EDIT_JOBNAME));
@@ -200,9 +203,9 @@ static INT_PTR CALLBACK DlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp)
             // Filters (use larger buffer)
             wchar_t filterBuf[4096];
             GetDlgItemTextW(hDlg, IDC_EDIT_EXCLUDE, filterBuf, 4096);
-            ctx->data->excludePatterns = filterBuf;
+            ctx->data->excludePatterns = NormalizePatternsForEditor(filterBuf);
             GetDlgItemTextW(hDlg, IDC_EDIT_INCLUDE, filterBuf, 4096);
-            ctx->data->includePatterns = filterBuf;
+            ctx->data->includePatterns = NormalizePatternsForEditor(filterBuf);
 
             if (ctx->data->name.empty()) {
                 MessageBoxW(hDlg, L"Please enter a job name.", L"Missing field", MB_ICONWARNING);
